@@ -178,20 +178,29 @@ def print_saved_positions(path: Path) -> None:
         print(f"No saved positions found in {path}.")
         return
 
+    rows.sort(key=rank_sort_key)
+
     print(f"Latest saved positions: {path}")
     print_markdown_table(
-        ["checked_at", "app_id", "country", "keyword", "rank"],
+        ["keyword", "rank", "country", "app_id", "checked_at"],
         [
             [
-                row.get("checked_at", ""),
-                row.get("app_id", ""),
-                row.get("country", ""),
                 row.get("keyword", ""),
                 row.get("rank", ""),
+                row.get("country", ""),
+                row.get("app_id", ""),
+                row.get("checked_at", ""),
             ]
             for row in rows
         ],
     )
+
+
+def rank_sort_key(row: dict[str, str]) -> tuple[int, int | str]:
+    rank = row.get("rank", "")
+    if rank.isdigit():
+        return (0, int(rank))
+    return (1, rank)
 
 
 def print_markdown_table(headers: list[str], rows: list[list[str]]) -> None:
