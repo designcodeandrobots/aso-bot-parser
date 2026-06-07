@@ -7,7 +7,7 @@ import sys
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -196,8 +196,139 @@ def print_saved_positions(path: Path) -> None:
     )
 
 
+def print_today_report() -> None:
+    today = date.today()
+    rows = [row for row in load_report_rows(saved_report_files()) if local_date(row["checked_at"]) == today]
+    if not rows:
+        print("No saved position reports found for today.")
+        return
+
+    print(f"Position changes today: {today.isoformat()}")
+    print_position_change_table(rows, "first_rank", "last_rank")
+
+
+def print_week_report() -> None:
+    end_date = date.today()
+    dates = [end_date - timedelta(days=offset) for offset in range(6, -1, -1)]
+    date_set = set(dates)
+    rows = [
+        row
+        for row in load_report_rows(saved_report_files())
+        if local_date(row["checked_at"]) in date_set
+    ]
+    if not rows:
+        print("No saved position reports found for the last 7 days.")
+        return
+
+    latest_by_day: dict[tuple[str, str, str, date], dict[str, str]] = {}
+    for row in rows:
+        key = (row["app_id"], row["country"], row["keyword"], local_date(row["checked_at"]))
+        current = latest_by_day.get(key)
+        if current is None or parse_checked_at(row["checked_at"]) > parse_checked_at(current["checked_at"]):
+            latest_by_day[key] = row
+
+    keys = sorted({(row["app_id"], row["country"], row["keyword"]) for row in rows}, key=lambda item: item[2])
+    sortable_rows: list[tuple[tuple[int, int | str], list[str]]] = []
+    for app_id, country, keyword in keys:
+        rank_by_date = {
+            report_date: latest_by_day[(app_id, country, keyword, report_date)]["rank"]
+            for report_date in dates
+            if (app_id, country, keyword, report_date) in latest_by_day
+        }
+        first_rank = next((rank_by_date[report_date] for report_date in dates if report_date in rank_by_date), "")
+        last_rank = next((rank_by_date[report_date] for report_date in reversed(dates) if report_date in rank_by_date), "")
+        sortable_rows.append(
+            (
+                rank_cell_sort_key(last_rank or "not found"),
+                [keyword, rank_delta(first_rank, last_rank), country, app_id]
+                + [rank_by_date.get(report_date, "") for report_date in dates],
+            )
+        )
+
+    table_rows = [row for _, row in sorted(sortable_rows, key=lambda item: item[0])]
+    print(f"Position changes for the last 7 days: {dates[0].isoformat()}..{dates[-1].isoformat()}")
+    print_markdown_table(
+        ["keyword", "rank_delta", "country", "app_id"] + [report_date.isoformat() for report_date in dates],
+        table_rows,
+    )
+
+
+def print_position_change_table(rows: list[dict[str, str]], first_label: str, last_label: str) -> None:
+    grouped: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    for row in rows:
+        grouped.setdefault((row["app_id"], row["country"], row["keyword"]), []).append(row)
+
+    table_rows: list[list[str]] = []
+    for (app_id, country, keyword), group_rows in grouped.items():
+        group_rows.sort(key=lambda row: parse_checked_at(row["checked_at"]))
+        first = group_rows[0]
+        last = group_rows[-1]
+        table_rows.append(
+            [
+                keyword,
+                first["rank"],
+                last["rank"],
+                rank_delta(first["rank"], last["rank"]),
+                country,
+                app_id,
+                first["checked_at"],
+                last["checked_at"],
+            ]
+        )
+
+    table_rows.sort(key=lambda row: rank_cell_sort_key(row[2]))
+    print_markdown_table(
+        ["keyword", first_label, last_label, "rank_delta", "country", "app_id", "first_checked_at", "last_checked_at"],
+        table_rows,
+    )
+
+
+def load_report_rows(paths: list[Path]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for path in paths:
+        with path.open("r", encoding="utf-8", newline="") as file:
+            for row in csv.DictReader(file):
+                if row.get("checked_at") and row.get("app_id") and row.get("country") and row.get("keyword"):
+                    rows.append(
+                        {
+                            "checked_at": row.get("checked_at", ""),
+                            "app_id": row.get("app_id", ""),
+                            "country": row.get("country", ""),
+                            "keyword": row.get("keyword", ""),
+                            "rank": row.get("rank", "not found"),
+                        }
+                    )
+    return rows
+
+
+def parse_checked_at(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def local_date(value: str) -> date:
+    return parse_checked_at(value).astimezone().date()
+
+
+def rank_delta(first_rank: str, last_rank: str) -> str:
+    first = rank_number(first_rank)
+    last = rank_number(last_rank)
+    if first is None or last is None:
+        return ""
+    delta = last - first
+    if delta > 0:
+        return f"+{delta}"
+    return str(delta)
+
+
+def rank_number(value: str) -> int | None:
+    return int(value) if value.isdigit() else None
+
+
 def rank_sort_key(row: dict[str, str]) -> tuple[int, int | str]:
-    rank = row.get("rank", "")
+    return rank_cell_sort_key(row.get("rank", ""))
+
+
+def rank_cell_sort_key(rank: str) -> tuple[int, int | str]:
     if rank.isdigit():
         return (0, int(rank))
     return (1, rank)
@@ -367,9 +498,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
-    parser.add_argument("--check-history", action="store_true", help="List saved check sets and exit.")
+    parser.add_argument("--show-logs", action="store_true", help="List saved check sets and exit.")
     parser.add_argument("--show-keywords", action="store_true", help="Print the latest saved keyword list and exit.")
-    parser.add_argument("--show-saved-positions", action="store_true", help="Print the latest saved positions report and exit.")
+    parser.add_argument("--show-report-last", action="store_true", help="Print the latest saved positions report and exit.")
+    parser.add_argument("--show-report-today", action="store_true", help="Print today's saved position changes and exit.")
+    parser.add_argument("--show-report-week", action="store_true", help="Print saved position changes for the last 7 days and exit.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
@@ -384,10 +517,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     slash_aliases = {
         "/check-new-positions": "--check-new-positions",
-        "/check-history": "--check-history",
         "/help": "--help",
         "/show-keywords": "--show-keywords",
-        "/show-saved-positions": "--show-saved-positions",
+        "/show-logs": "--show-logs",
+        "/show-report-last": "--show-report-last",
+        "/show-report-today": "--show-report-today",
+        "/show-report-week": "--show-report-week",
         "/update-keywords": "--update-keywords",
     }
     if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
@@ -395,7 +530,7 @@ def main() -> None:
 
     args = build_parser().parse_args()
 
-    if args.check_history:
+    if args.show_logs:
         print_history()
         return
 
@@ -403,8 +538,16 @@ def main() -> None:
         print_keywords(require_latest_checks_file())
         return
 
-    if args.show_saved_positions:
+    if args.show_report_last:
         print_saved_positions(require_latest_report_file())
+        return
+
+    if args.show_report_today:
+        print_today_report()
+        return
+
+    if args.show_report_week:
+        print_week_report()
         return
 
     if args.update_keywords:
