@@ -434,6 +434,32 @@ def update_keywords(path: Path) -> Path:
     return updated_path
 
 
+def add_keywords(path: Path) -> Path:
+    checks = load_checks(path)
+    if not checks:
+        raise SystemExit(f"No checks found in {path}.")
+
+    countries = sorted({check.country for check in checks})
+    print(f"Adding keywords for countries: {', '.join(countries)}")
+    keywords = ask_keywords()
+    existing = {(check.country, check.keyword.casefold()) for check in checks}
+    additions = [
+        Check(app_id=checks[0].app_id, country=country, keyword=keyword)
+        for country in countries
+        for keyword in keywords
+        if (country, keyword.casefold()) not in existing
+    ]
+    if not additions:
+        print("No new keywords to add.")
+        return path
+
+    checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updated_path = save_checks(checks + additions, checked_at)
+    print(f"\nAdded {len(additions)} keyword checks.")
+    print(f"Updated checks saved: {updated_path}")
+    return updated_path
+
+
 def run_checks(checks: list[Check], limit: int, delay_seconds: float) -> list[RankResult]:
     client = AppStoreClient()
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -587,6 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
     parser.add_argument("--add-geo", action="store_true", help="Add one country to the latest saved check set.")
+    parser.add_argument("--add-keywords", action="store_true", help="Append keywords to the latest saved check set.")
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
     parser.add_argument("--delete-geo", action="store_true", help="Remove one country from the active check set without deleting history.")
     parser.add_argument("--show-logs", action="store_true", help="List saved check sets and exit.")
@@ -615,6 +642,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     slash_aliases = {
         "/add-geo": "--add-geo",
+        "/add-keywords": "--add-keywords",
         "/check-new-positions": "--check-new-positions",
         "/delete-geo": "--delete-geo",
         "/help": "--help",
@@ -645,6 +673,10 @@ def main() -> None:
 
     if args.add_geo:
         add_geo(require_latest_checks_file())
+        return
+
+    if args.add_keywords:
+        add_keywords(require_latest_checks_file())
         return
 
     if args.delete_geo:

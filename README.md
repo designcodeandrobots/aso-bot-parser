@@ -130,6 +130,7 @@ Slash commands are convenient when the tool is driven from chat:
 | --- | --- |
 | `/help` | Show CLI help. |
 | `/add-geo` | Add one country to the active check set, then enter keywords for that country. |
+| `/add-keywords` | Append keywords to the latest saved check set. |
 | `/check-new-positions` | Check positions for the latest saved keyword list. |
 | `/delete-geo` | Remove one country from the active check set after confirmation. Previous files are not deleted. |
 | `/show-geo-list` | Print active countries in the latest saved check set. |
@@ -144,6 +145,7 @@ Examples:
 
 ```bash
 python3 -m app_store_rank_bot /add-geo
+python3 -m app_store_rank_bot /add-keywords
 python3 -m app_store_rank_bot /show-keywords
 python3 -m app_store_rank_bot /show-geo-list
 python3 -m app_store_rank_bot /show-report-last
@@ -159,6 +161,7 @@ The same actions are available as regular flags:
 
 ```bash
 python3 -m app_store_rank_bot --add-geo
+python3 -m app_store_rank_bot --add-keywords
 python3 -m app_store_rank_bot --show-keywords
 python3 -m app_store_rank_bot --show-geo-list
 python3 -m app_store_rank_bot --show-report-last
@@ -218,6 +221,7 @@ Use either command:
 python3 -m app_store_rank_bot --help
 python3 -m app_store_rank_bot /help
 python3 -m app_store_rank_bot /add-geo
+python3 -m app_store_rank_bot /add-keywords
 python3 -m app_store_rank_bot /show-logs
 python3 -m app_store_rank_bot /show-geo-list
 python3 -m app_store_rank_bot /show-keywords
