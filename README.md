@@ -61,7 +61,7 @@ The CLI asks for:
 Example keyword input:
 
 ```text
-scan to email, scanner for me, free scanner app
+ai chat, note taking app, language learning
 ```
 
 After input, the tool:
