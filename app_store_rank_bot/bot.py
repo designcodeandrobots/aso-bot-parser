@@ -549,6 +549,69 @@ def check_positions(checks: list[Check], limit: int, output_format: str, delay_s
     return report_path
 
 
+def create_new_check_set() -> Path:
+    checks = ask_checks()
+    checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    checks_path = save_checks(checks, checked_at)
+    print(f"\nChecks saved: {checks_path}")
+    return checks_path
+
+
+def run_menu(args: argparse.Namespace) -> None:
+    while True:
+        print("\nASO Bot Parser")
+        print("1. Create new check set")
+        print("2. Show keywords")
+        print("3. Add keywords")
+        print("4. Update keywords")
+        print("5. Show geo list")
+        print("6. Add geo")
+        print("7. Delete geo")
+        print("8. Check new positions")
+        print("9. Show last report")
+        print("10. Show today report")
+        print("11. Show week report")
+        print("12. Show logs")
+        print("0. Exit")
+
+        choice = input("Choose action: ").strip()
+        print()
+
+        if choice == "0":
+            print("Bye.")
+            return
+        if choice == "1":
+            create_new_check_set()
+        elif choice == "2":
+            print_keywords(require_latest_checks_file())
+        elif choice == "3":
+            add_keywords(require_latest_checks_file())
+        elif choice == "4":
+            update_keywords(require_latest_checks_file())
+        elif choice == "5":
+            print_geo_list(require_latest_checks_file())
+        elif choice == "6":
+            add_geo(require_latest_checks_file())
+        elif choice == "7":
+            delete_geo(require_latest_checks_file())
+        elif choice == "8":
+            checks_path = require_latest_checks_file()
+            print(f"Checking latest saved keywords: {checks_path}")
+            check_positions(load_checks(checks_path), args.limit, args.format, args.delay_seconds)
+        elif choice == "9":
+            print_saved_positions(require_latest_report_file())
+        elif choice == "10":
+            print_today_report()
+        elif choice == "11":
+            print_week_report()
+        elif choice == "12":
+            print_history()
+        else:
+            print("Unknown action. Choose a number from the menu.")
+
+        input("\nPress Enter to continue...")
+
+
 def ask_checks() -> list[Check]:
     print("Step 1. App")
     app_id = ask_app_id()
@@ -659,6 +722,10 @@ def main() -> None:
 
     args = build_parser().parse_args()
 
+    if len(sys.argv) == 1:
+        run_menu(args)
+        return
+
     if args.show_logs:
         print_history()
         return
@@ -707,9 +774,7 @@ def main() -> None:
         checks = load_checks(args.config)
         checks_path = args.config
     else:
-        checks = ask_checks()
-        checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        checks_path = save_checks(checks, checked_at)
-        print(f"\nChecks saved: {checks_path}")
+        checks_path = create_new_check_set()
+        checks = load_checks(checks_path)
 
     check_positions(checks, args.limit, args.format, args.delay_seconds)

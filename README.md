@@ -36,7 +36,7 @@ git clone https://github.com/designcodeandrobots/aso-bot-parser.git
 cd aso-bot-parser
 ```
 
-Run the tool:
+Run the menu interface:
 
 ```bash
 python3 -m app_store_rank_bot
@@ -44,15 +44,34 @@ python3 -m app_store_rank_bot
 
 No third-party Python packages are required.
 
-## Interactive CLI Usage
+## Menu CLI Usage
 
-Start the interactive flow:
+Start the menu:
 
 ```bash
 python3 -m app_store_rank_bot
 ```
 
-The CLI asks for:
+You will see:
+
+```text
+ASO Bot Parser
+1. Create new check set
+2. Show keywords
+3. Add keywords
+4. Update keywords
+5. Show geo list
+6. Add geo
+7. Delete geo
+8. Check new positions
+9. Show last report
+10. Show today report
+11. Show week report
+12. Show logs
+0. Exit
+```
+
+Choose `1` to create a new check set. The CLI asks for:
 
 1. The App Store `app_id`
 2. The target country
