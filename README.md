@@ -71,6 +71,29 @@ After input, the tool:
 3. Saves the report to `reports/positions-<timestamp>.csv`
 4. Prints the same results to the terminal
 
+## Request Delay
+
+The tool waits between App Store requests to reduce the chance of rate limits or IP blocking. The default delay is `1.0` second between requests.
+
+For large keyword lists, increase the delay:
+
+```bash
+python3 -m app_store_rank_bot /check-new-positions --delay-seconds 2
+```
+
+You can also set the default through an environment variable:
+
+```bash
+export ASO_REQUEST_DELAY_SECONDS=2
+python3 -m app_store_rank_bot /check-new-positions
+```
+
+Use `0` only when you intentionally want no delay:
+
+```bash
+python3 -m app_store_rank_bot /check-new-positions --delay-seconds 0
+```
+
 ## Saved History
 
 The tool keeps local history in two folders:

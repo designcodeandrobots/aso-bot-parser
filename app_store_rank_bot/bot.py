@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -15,6 +17,7 @@ from typing import Any
 APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
 CHECKS_DIR = Path("checks")
 REPORTS_DIR = Path("reports")
+DEFAULT_DELAY_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -431,7 +434,7 @@ def update_keywords(path: Path) -> Path:
     return updated_path
 
 
-def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
+def run_checks(checks: list[Check], limit: int, delay_seconds: float) -> list[RankResult]:
     client = AppStoreClient()
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     results: list[RankResult] = []
@@ -447,6 +450,9 @@ def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
                 checked_at=checked_at,
             )
         )
+        if delay_seconds > 0 and index < len(checks):
+            print(f"Waiting {delay_seconds:g}s before the next request...")
+            time.sleep(delay_seconds)
 
     return results
 
@@ -503,9 +509,9 @@ def print_json(results: list[RankResult]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def check_positions(checks: list[Check], limit: int, output_format: str) -> Path:
+def check_positions(checks: list[Check], limit: int, output_format: str, delay_seconds: float) -> Path:
     print("\nChecking App Store positions...")
-    results = run_checks(checks, limit)
+    results = run_checks(checks, limit, delay_seconds)
     report_path = write_report(results)
 
     if output_format == "json":
@@ -555,6 +561,23 @@ def ask_keywords() -> list[str]:
         print("Add at least one keyword.")
 
 
+def delay_from_env() -> float:
+    raw_value = os.environ.get("ASO_REQUEST_DELAY_SECONDS")
+    if raw_value is None:
+        return DEFAULT_DELAY_SECONDS
+    return parse_delay(raw_value)
+
+
+def parse_delay(value: str) -> float:
+    try:
+        delay = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("delay must be a number") from exc
+    if delay < 0:
+        raise argparse.ArgumentTypeError("delay must be 0 or greater")
+    return delay
+
+
 def file_timestamp(value: str) -> str:
     normalized = value.replace("+00:00", "Z")
     return normalized.replace(":", "").replace("-", "")
@@ -574,6 +597,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-report-week", action="store_true", help="Print saved position changes for the last 7 days and exit.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
+    parser.add_argument(
+        "--delay-seconds",
+        type=parse_delay,
+        default=delay_from_env(),
+        help="Delay between App Store requests. Default: 1.0 or ASO_REQUEST_DELAY_SECONDS.",
+    )
     parser.add_argument(
         "--format",
         choices=("table", "json"),
@@ -651,4 +680,4 @@ def main() -> None:
         checks_path = save_checks(checks, checked_at)
         print(f"\nChecks saved: {checks_path}")
 
-    check_positions(checks, args.limit, args.format)
+    check_positions(checks, args.limit, args.format, args.delay_seconds)
