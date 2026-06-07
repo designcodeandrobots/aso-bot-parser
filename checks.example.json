@@ -1,0 +1,14 @@
+{
+  "checks": [
+    {
+      "app_id": "284882215",
+      "country": "US",
+      "keyword": "fitness tracker"
+    },
+    {
+      "app_id": "310633997",
+      "country": "GB",
+      "keyword": "messenger"
+    }
+  ]
+}
