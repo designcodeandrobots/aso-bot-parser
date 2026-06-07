@@ -169,13 +169,13 @@ def print_json(results: list[RankResult]) -> None:
 
 
 def ask_checks() -> list[Check]:
-    print("Шаг 1. Приложение")
+    print("Step 1. App")
     app_id = ask_app_id()
 
-    print("\nШаг 2. Страна")
+    print("\nStep 2. Country")
     country = ask_country()
 
-    print("\nШаг 3. Ключевые запросы")
+    print("\nStep 3. Keywords")
     keywords = ask_keywords()
 
     return [Check(app_id=app_id, country=country, keyword=keyword) for keyword in keywords]
@@ -183,32 +183,27 @@ def ask_checks() -> list[Check]:
 
 def ask_app_id() -> str:
     while True:
-        value = input("Введите app_id из App Store: ").strip()
+        value = input("Enter the App Store app_id: ").strip()
         if value.isdigit():
             return value
-        print("app_id должен быть числом, например 284882215.")
+        print("app_id must be numeric, for example 284882215.")
 
 
 def ask_country() -> str:
     while True:
-        value = input("Введите страну, код из 2 букв, например US: ").strip().upper()
+        value = input("Enter the 2-letter country code, for example US: ").strip().upper()
         if len(value) == 2 and value.isalpha():
             return value
-        print("Нужен двухбуквенный код страны: US, GB, DE, FR и т.д.")
+        print("Use a 2-letter country code such as US, GB, DE, or FR.")
 
 
 def ask_keywords() -> list[str]:
-    print("Вводите по одному запросу на строку. Пустая строка завершит ввод.")
-    keywords: list[str] = []
-
     while True:
-        value = input(f"Ключ #{len(keywords) + 1}: ").strip()
-        if not value:
-            if keywords:
-                return keywords
-            print("Добавьте хотя бы один ключевой запрос.")
-            continue
-        keywords.append(value)
+        value = input("Enter all keywords separated by commas or semicolons: ").strip()
+        keywords = [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
+        if keywords:
+            return keywords
+        print("Add at least one keyword.")
 
 
 def file_timestamp(value: str) -> str:
@@ -230,6 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "/help":
+        sys.argv[1] = "--help"
+
     args = build_parser().parse_args()
 
     if args.config:
@@ -239,9 +237,9 @@ def main() -> None:
         checks = ask_checks()
         checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         checks_path = save_checks(checks, checked_at)
-        print(f"\nСписок проверок сохранен: {checks_path}")
+        print(f"\nChecks saved: {checks_path}")
 
-    print("\nПроверяю позиции в App Store...")
+    print("\nChecking App Store positions...")
     results = run_checks(checks, args.limit)
     report_path = write_report(results)
 
@@ -250,4 +248,4 @@ def main() -> None:
     else:
         print_table(results)
 
-    print(f"\nОтчет сохранен: {report_path}")
+    print(f"\nReport saved: {report_path}")

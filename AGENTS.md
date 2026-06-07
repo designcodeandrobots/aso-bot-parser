@@ -1,5 +1,5 @@
 # AGENTS.md
 
-Используй `/Users/a1234/Documents/Advert/AGENTS.md` как основную инструкцию.
+Use `/Users/a1234/Documents/Advert/AGENTS.md` as the main instruction file.
 
-Дополнение: если для задачи не хватает информации или есть несколько вероятных трактовок, не угадывай молча - спроси пользователя.
+Addition: if required information is missing or there are multiple likely interpretations, do not guess silently. Ask the user.
