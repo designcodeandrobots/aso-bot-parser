@@ -107,10 +107,28 @@ def latest_checks_file() -> Path | None:
     return files[0] if files else None
 
 
+def saved_report_files() -> list[Path]:
+    if not REPORTS_DIR.exists():
+        return []
+    return sorted(REPORTS_DIR.glob("positions-*.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def latest_report_file() -> Path | None:
+    files = saved_report_files()
+    return files[0] if files else None
+
+
 def require_latest_checks_file() -> Path:
     path = latest_checks_file()
     if path is None:
         raise SystemExit("No saved check sets found. Run the interactive flow first.")
+    return path
+
+
+def require_latest_report_file() -> Path:
+    path = latest_report_file()
+    if path is None:
+        raise SystemExit("No saved position reports found. Run /check-new-positions first.")
     return path
 
 
@@ -150,6 +168,45 @@ def print_keywords(path: Path) -> None:
     print(f"Countries: {', '.join(countries)}")
     for index, check in enumerate(checks, start=1):
         print(f"{index}. {check.keyword}")
+
+
+def print_saved_positions(path: Path) -> None:
+    with path.open("r", encoding="utf-8", newline="") as file:
+        rows = list(csv.DictReader(file))
+
+    if not rows:
+        print(f"No saved positions found in {path}.")
+        return
+
+    print(f"Latest saved positions: {path}")
+    print_markdown_table(
+        ["checked_at", "app_id", "country", "keyword", "rank"],
+        [
+            [
+                row.get("checked_at", ""),
+                row.get("app_id", ""),
+                row.get("country", ""),
+                row.get("keyword", ""),
+                row.get("rank", ""),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def print_markdown_table(headers: list[str], rows: list[list[str]]) -> None:
+    widths = [
+        max(len(str(value)) for value in [header] + [row[index] for row in rows])
+        for index, header in enumerate(headers)
+    ]
+
+    header_row = "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)) + " |"
+    separator = "| " + " | ".join("-" * width for width in widths) + " |"
+    print(header_row)
+    print(separator)
+
+    for row in rows:
+        print("| " + " | ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)) + " |")
 
 
 def update_keywords(path: Path) -> Path:
@@ -303,6 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
     parser.add_argument("--check-history", action="store_true", help="List saved check sets and exit.")
     parser.add_argument("--show-keywords", action="store_true", help="Print the latest saved keyword list and exit.")
+    parser.add_argument("--show-saved-positions", action="store_true", help="Print the latest saved positions report and exit.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
@@ -320,6 +378,7 @@ def main() -> None:
         "/check-history": "--check-history",
         "/help": "--help",
         "/show-keywords": "--show-keywords",
+        "/show-saved-positions": "--show-saved-positions",
         "/update-keywords": "--update-keywords",
     }
     if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
@@ -333,6 +392,10 @@ def main() -> None:
 
     if args.show_keywords:
         print_keywords(require_latest_checks_file())
+        return
+
+    if args.show_saved_positions:
+        print_saved_positions(require_latest_report_file())
         return
 
     if args.update_keywords:
