@@ -99,6 +99,40 @@ python3 -m app_store_rank_bot --rerun
 
 Each rerun creates a new report in `reports/`, so you can compare rank changes over time.
 
+## Commands
+
+Slash commands are convenient when the tool is driven from chat:
+
+| Command | What it does |
+| --- | --- |
+| `/help` | Show CLI help. |
+| `/check` | Check positions for the latest saved keyword list. |
+| `/check-keywords` | Alias for `/check`. |
+| `/keywords` | Print the latest saved keyword list. |
+| `/update` | Replace keywords for the latest saved app/country pair. |
+| `/update-keywords` | Alias for `/update`. |
+| `/positions` | Check current positions for the latest saved keyword list. |
+| `/history` | Show saved check sets. |
+| `/rerun` | Alias for `/check`. |
+
+Examples:
+
+```bash
+python3 -m app_store_rank_bot /keywords
+python3 -m app_store_rank_bot /update
+python3 -m app_store_rank_bot /positions
+python3 -m app_store_rank_bot /history
+```
+
+The same actions are available as regular flags:
+
+```bash
+python3 -m app_store_rank_bot --keywords
+python3 -m app_store_rank_bot --update-keywords
+python3 -m app_store_rank_bot --positions
+python3 -m app_store_rank_bot --history
+```
+
 ## Run From a Config File
 
 You can also prepare a JSON file:
@@ -148,6 +182,9 @@ python3 -m app_store_rank_bot --help
 python3 -m app_store_rank_bot /help
 python3 -m app_store_rank_bot /history
 python3 -m app_store_rank_bot /rerun
+python3 -m app_store_rank_bot /keywords
+python3 -m app_store_rank_bot /update
+python3 -m app_store_rank_bot /positions
 ```
 
 ## Chatbot / Agent Usage
@@ -167,7 +204,7 @@ Recommended flow:
 To repeat the previous keyword set from chat, run:
 
 ```bash
-python3 -m app_store_rank_bot /rerun
+python3 -m app_store_rank_bot /check
 ```
 
 For fully non-interactive chatbot runs, write a temporary JSON config and run:

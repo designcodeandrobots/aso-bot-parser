@@ -107,6 +107,13 @@ def latest_checks_file() -> Path | None:
     return files[0] if files else None
 
 
+def require_latest_checks_file() -> Path:
+    path = latest_checks_file()
+    if path is None:
+        raise SystemExit("No saved check sets found. Run the interactive flow first.")
+    return path
+
+
 def print_history() -> None:
     files = saved_check_files()
     if not files:
@@ -128,6 +135,37 @@ def print_history() -> None:
 def read_created_at(path: Path) -> str:
     data = json.loads(path.read_text(encoding="utf-8"))
     return str(data.get("created_at") or "unknown")
+
+
+def print_keywords(path: Path) -> None:
+    checks = load_checks(path)
+    if not checks:
+        print(f"No keywords found in {path}.")
+        return
+
+    app_ids = sorted({check.app_id for check in checks})
+    countries = sorted({check.country for check in checks})
+    print(f"Current keyword list: {path}")
+    print(f"Apps: {', '.join(app_ids)}")
+    print(f"Countries: {', '.join(countries)}")
+    for index, check in enumerate(checks, start=1):
+        print(f"{index}. {check.keyword}")
+
+
+def update_keywords(path: Path) -> Path:
+    checks = load_checks(path)
+    if not checks:
+        raise SystemExit(f"No checks found in {path}.")
+
+    app_id = checks[0].app_id
+    country = checks[0].country
+    print(f"Updating keyword list for app_id={app_id}, country={country}")
+    keywords = ask_keywords()
+    updated_checks = [Check(app_id=app_id, country=country, keyword=keyword) for keyword in keywords]
+    checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updated_path = save_checks(updated_checks, checked_at)
+    print(f"\nUpdated checks saved: {updated_path}")
+    return updated_path
 
 
 def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
@@ -202,6 +240,20 @@ def print_json(results: list[RankResult]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def check_positions(checks: list[Check], limit: int, output_format: str) -> Path:
+    print("\nChecking App Store positions...")
+    results = run_checks(checks, limit)
+    report_path = write_report(results)
+
+    if output_format == "json":
+        print_json(results)
+    else:
+        print_table(results)
+
+    print(f"\nReport saved: {report_path}")
+    return report_path
+
+
 def ask_checks() -> list[Check]:
     print("Step 1. App")
     app_id = ask_app_id()
@@ -248,8 +300,12 @@ def file_timestamp(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
+    parser.add_argument("--check", action="store_true", help="Check positions for the latest saved keyword list.")
     parser.add_argument("--history", action="store_true", help="List saved check sets and exit.")
+    parser.add_argument("--keywords", action="store_true", help="Print the latest saved keyword list and exit.")
+    parser.add_argument("--positions", action="store_true", help="Alias for --check.")
     parser.add_argument("--rerun", action="store_true", help="Rerun the latest saved check set.")
+    parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
         "--format",
@@ -262,9 +318,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     slash_aliases = {
+        "/check": "--check",
+        "/check-keywords": "--check",
         "/help": "--help",
         "/history": "--history",
+        "/keywords": "--keywords",
+        "/positions": "--positions",
         "/rerun": "--rerun",
+        "/update": "--update-keywords",
+        "/update-keywords": "--update-keywords",
     }
     if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
         sys.argv[1] = slash_aliases[sys.argv[1]]
@@ -275,12 +337,18 @@ def main() -> None:
         print_history()
         return
 
-    if args.rerun:
-        checks_path = latest_checks_file()
-        if checks_path is None:
-            raise SystemExit("No saved check sets found. Run the interactive flow first.")
+    if args.keywords:
+        print_keywords(require_latest_checks_file())
+        return
+
+    if args.update_keywords:
+        update_keywords(require_latest_checks_file())
+        return
+
+    if args.check or args.positions or args.rerun:
+        checks_path = require_latest_checks_file()
         checks = load_checks(checks_path)
-        print(f"Rerunning latest saved checks: {checks_path}")
+        print(f"Checking latest saved keywords: {checks_path}")
     elif args.config:
         checks = load_checks(args.config)
         checks_path = args.config
@@ -290,13 +358,4 @@ def main() -> None:
         checks_path = save_checks(checks, checked_at)
         print(f"\nChecks saved: {checks_path}")
 
-    print("\nChecking App Store positions...")
-    results = run_checks(checks, args.limit)
-    report_path = write_report(results)
-
-    if args.format == "json":
-        print_json(results)
-    else:
-        print_table(results)
-
-    print(f"\nReport saved: {report_path}")
+    check_positions(checks, args.limit, args.format)
