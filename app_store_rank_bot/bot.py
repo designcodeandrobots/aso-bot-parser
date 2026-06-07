@@ -300,11 +300,9 @@ def file_timestamp(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
-    parser.add_argument("--check", action="store_true", help="Check positions for the latest saved keyword list.")
+    parser.add_argument("--check-positions", action="store_true", help="Check positions for the latest saved keyword list.")
     parser.add_argument("--history", action="store_true", help="List saved check sets and exit.")
     parser.add_argument("--keywords", action="store_true", help="Print the latest saved keyword list and exit.")
-    parser.add_argument("--positions", action="store_true", help="Alias for --check.")
-    parser.add_argument("--rerun", action="store_true", help="Rerun the latest saved check set.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
@@ -318,14 +316,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     slash_aliases = {
-        "/check": "--check",
-        "/check-keywords": "--check",
+        "/check-positions": "--check-positions",
         "/help": "--help",
         "/history": "--history",
         "/keywords": "--keywords",
-        "/positions": "--positions",
-        "/rerun": "--rerun",
-        "/update": "--update-keywords",
         "/update-keywords": "--update-keywords",
     }
     if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
@@ -345,7 +339,7 @@ def main() -> None:
         update_keywords(require_latest_checks_file())
         return
 
-    if args.check or args.positions or args.rerun:
+    if args.check_positions:
         checks_path = require_latest_checks_file()
         checks = load_checks(checks_path)
         print(f"Checking latest saved keywords: {checks_path}")
