@@ -81,20 +81,20 @@ The tool keeps local history in two folders:
 To list saved check sets:
 
 ```bash
-python3 -m app_store_rank_bot /history
+python3 -m app_store_rank_bot /check-history
 ```
 
 To check positions for the latest saved check set:
 
 ```bash
-python3 -m app_store_rank_bot /check-positions
+python3 -m app_store_rank_bot /check-new-positions
 ```
 
 You can also use standard flags:
 
 ```bash
-python3 -m app_store_rank_bot --history
-python3 -m app_store_rank_bot --check-positions
+python3 -m app_store_rank_bot --check-history
+python3 -m app_store_rank_bot --check-new-positions
 ```
 
 Each check creates a new report in `reports/`, so you can compare rank changes over time.
@@ -106,27 +106,27 @@ Slash commands are convenient when the tool is driven from chat:
 | Command | What it does |
 | --- | --- |
 | `/help` | Show CLI help. |
-| `/check-positions` | Check positions for the latest saved keyword list. |
-| `/keywords` | Print the latest saved keyword list. |
+| `/check-new-positions` | Check positions for the latest saved keyword list. |
+| `/show-keywords` | Print the latest saved keyword list. |
 | `/update-keywords` | Replace keywords for the latest saved app/country pair. |
-| `/history` | Show saved check sets. |
+| `/check-history` | Show saved check sets. |
 
 Examples:
 
 ```bash
-python3 -m app_store_rank_bot /keywords
+python3 -m app_store_rank_bot /show-keywords
 python3 -m app_store_rank_bot /update-keywords
-python3 -m app_store_rank_bot /check-positions
-python3 -m app_store_rank_bot /history
+python3 -m app_store_rank_bot /check-new-positions
+python3 -m app_store_rank_bot /check-history
 ```
 
 The same actions are available as regular flags:
 
 ```bash
-python3 -m app_store_rank_bot --keywords
+python3 -m app_store_rank_bot --show-keywords
 python3 -m app_store_rank_bot --update-keywords
-python3 -m app_store_rank_bot --check-positions
-python3 -m app_store_rank_bot --history
+python3 -m app_store_rank_bot --check-new-positions
+python3 -m app_store_rank_bot --check-history
 ```
 
 ## Run From a Config File
@@ -176,10 +176,10 @@ Use either command:
 ```bash
 python3 -m app_store_rank_bot --help
 python3 -m app_store_rank_bot /help
-python3 -m app_store_rank_bot /history
-python3 -m app_store_rank_bot /keywords
+python3 -m app_store_rank_bot /check-history
+python3 -m app_store_rank_bot /show-keywords
 python3 -m app_store_rank_bot /update-keywords
-python3 -m app_store_rank_bot /check-positions
+python3 -m app_store_rank_bot /check-new-positions
 ```
 
 ## Chatbot / Agent Usage
@@ -199,7 +199,7 @@ Recommended flow:
 To repeat the previous keyword set from chat, run:
 
 ```bash
-python3 -m app_store_rank_bot /check-positions
+python3 -m app_store_rank_bot /check-new-positions
 ```
 
 For fully non-interactive chatbot runs, write a temporary JSON config and run:
