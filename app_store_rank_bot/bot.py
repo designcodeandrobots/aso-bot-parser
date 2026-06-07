@@ -170,6 +170,72 @@ def print_keywords(path: Path) -> None:
         print(f"{index}. {check.keyword}")
 
 
+def print_geo_list(path: Path) -> None:
+    checks = load_checks(path)
+    if not checks:
+        print(f"No geos found in {path}.")
+        return
+
+    print(f"Current geo list: {path}")
+    for index, country in enumerate(sorted({check.country for check in checks}), start=1):
+        keyword_count = sum(1 for check in checks if check.country == country)
+        print(f"{index}. {country} ({keyword_count} keywords)")
+
+
+def add_geo(path: Path) -> Path:
+    checks = load_checks(path)
+    if not checks:
+        raise SystemExit(f"No checks found in {path}.")
+
+    app_ids = sorted({check.app_id for check in checks})
+    if len(app_ids) != 1:
+        raise SystemExit("Add geo supports one app_id per active check set.")
+
+    country = ask_country()
+    existing_countries = {check.country for check in checks}
+    if country in existing_countries:
+        raise SystemExit(f"{country} already exists in the active geo list.")
+
+    print(f"Adding geo {country} for app_id={app_ids[0]}")
+    keywords = ask_keywords()
+    updated_checks = checks + [Check(app_id=app_ids[0], country=country, keyword=keyword) for keyword in keywords]
+    checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updated_path = save_checks(updated_checks, checked_at)
+    print(f"\nUpdated checks saved: {updated_path}")
+    return updated_path
+
+
+def delete_geo(path: Path) -> Path:
+    checks = load_checks(path)
+    if not checks:
+        raise SystemExit(f"No checks found in {path}.")
+
+    countries = sorted({check.country for check in checks})
+    print("Current geos:")
+    for index, country in enumerate(countries, start=1):
+        keyword_count = sum(1 for check in checks if check.country == country)
+        print(f"{index}. {country} ({keyword_count} keywords)")
+
+    country = ask_country()
+    if country not in countries:
+        raise SystemExit(f"{country} is not in the active geo list.")
+    if len(countries) == 1:
+        raise SystemExit("Cannot delete the only active geo. Add another geo first.")
+
+    confirmation = input(f"Type DELETE {country} to remove {country} from the active list: ").strip()
+    if confirmation != f"DELETE {country}":
+        print("Delete cancelled.")
+        return path
+
+    updated_checks = [check for check in checks if check.country != country]
+    checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updated_path = save_checks(updated_checks, checked_at)
+    print(f"\nGeo {country} removed from active checks.")
+    print(f"Updated checks saved: {updated_path}")
+    print("Previous checks and reports were not deleted.")
+    return updated_path
+
+
 def print_saved_positions(path: Path) -> None:
     with path.open("r", encoding="utf-8", newline="") as file:
         rows = list(csv.DictReader(file))
@@ -497,8 +563,11 @@ def file_timestamp(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
+    parser.add_argument("--add-geo", action="store_true", help="Add one country to the latest saved check set.")
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
+    parser.add_argument("--delete-geo", action="store_true", help="Remove one country from the active check set without deleting history.")
     parser.add_argument("--show-logs", action="store_true", help="List saved check sets and exit.")
+    parser.add_argument("--show-geo-list", action="store_true", help="Print active countries in the latest saved check set and exit.")
     parser.add_argument("--show-keywords", action="store_true", help="Print the latest saved keyword list and exit.")
     parser.add_argument("--show-report-last", action="store_true", help="Print the latest saved positions report and exit.")
     parser.add_argument("--show-report-today", action="store_true", help="Print today's saved position changes and exit.")
@@ -516,8 +585,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     slash_aliases = {
+        "/add-geo": "--add-geo",
         "/check-new-positions": "--check-new-positions",
+        "/delete-geo": "--delete-geo",
         "/help": "--help",
+        "/show-geo-list": "--show-geo-list",
         "/show-keywords": "--show-keywords",
         "/show-logs": "--show-logs",
         "/show-report-last": "--show-report-last",
@@ -534,8 +606,20 @@ def main() -> None:
         print_history()
         return
 
+    if args.show_geo_list:
+        print_geo_list(require_latest_checks_file())
+        return
+
     if args.show_keywords:
         print_keywords(require_latest_checks_file())
+        return
+
+    if args.add_geo:
+        add_geo(require_latest_checks_file())
+        return
+
+    if args.delete_geo:
+        delete_geo(require_latest_checks_file())
         return
 
     if args.show_report_last:

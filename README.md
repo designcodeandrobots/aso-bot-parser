@@ -106,7 +106,10 @@ Slash commands are convenient when the tool is driven from chat:
 | Command | What it does |
 | --- | --- |
 | `/help` | Show CLI help. |
+| `/add-geo` | Add one country to the active check set, then enter keywords for that country. |
 | `/check-new-positions` | Check positions for the latest saved keyword list. |
+| `/delete-geo` | Remove one country from the active check set after confirmation. Previous files are not deleted. |
+| `/show-geo-list` | Print active countries in the latest saved check set. |
 | `/show-keywords` | Print the latest saved keyword list. |
 | `/show-report-last` | Print the latest saved positions report as a table. |
 | `/show-report-today` | Print today's rank changes from saved reports. |
@@ -117,11 +120,14 @@ Slash commands are convenient when the tool is driven from chat:
 Examples:
 
 ```bash
+python3 -m app_store_rank_bot /add-geo
 python3 -m app_store_rank_bot /show-keywords
+python3 -m app_store_rank_bot /show-geo-list
 python3 -m app_store_rank_bot /show-report-last
 python3 -m app_store_rank_bot /show-report-today
 python3 -m app_store_rank_bot /show-report-week
 python3 -m app_store_rank_bot /update-keywords
+python3 -m app_store_rank_bot /delete-geo
 python3 -m app_store_rank_bot /check-new-positions
 python3 -m app_store_rank_bot /show-logs
 ```
@@ -129,11 +135,14 @@ python3 -m app_store_rank_bot /show-logs
 The same actions are available as regular flags:
 
 ```bash
+python3 -m app_store_rank_bot --add-geo
 python3 -m app_store_rank_bot --show-keywords
+python3 -m app_store_rank_bot --show-geo-list
 python3 -m app_store_rank_bot --show-report-last
 python3 -m app_store_rank_bot --show-report-today
 python3 -m app_store_rank_bot --show-report-week
 python3 -m app_store_rank_bot --update-keywords
+python3 -m app_store_rank_bot --delete-geo
 python3 -m app_store_rank_bot --check-new-positions
 python3 -m app_store_rank_bot --show-logs
 ```
@@ -185,12 +194,15 @@ Use either command:
 ```bash
 python3 -m app_store_rank_bot --help
 python3 -m app_store_rank_bot /help
+python3 -m app_store_rank_bot /add-geo
 python3 -m app_store_rank_bot /show-logs
+python3 -m app_store_rank_bot /show-geo-list
 python3 -m app_store_rank_bot /show-keywords
 python3 -m app_store_rank_bot /show-report-last
 python3 -m app_store_rank_bot /show-report-today
 python3 -m app_store_rank_bot /show-report-week
 python3 -m app_store_rank_bot /update-keywords
+python3 -m app_store_rank_bot /delete-geo
 python3 -m app_store_rank_bot /check-new-positions
 ```
 
