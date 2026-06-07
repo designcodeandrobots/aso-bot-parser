@@ -71,6 +71,34 @@ After input, the tool:
 3. Saves the report to `reports/positions-<timestamp>.csv`
 4. Prints the same results to the terminal
 
+## Saved History
+
+The tool keeps local history in two folders:
+
+- `checks/`: saved app, country, and keyword sets
+- `reports/`: saved rank reports
+
+To list saved check sets:
+
+```bash
+python3 -m app_store_rank_bot /history
+```
+
+To rerun the latest saved check set:
+
+```bash
+python3 -m app_store_rank_bot /rerun
+```
+
+You can also use standard flags:
+
+```bash
+python3 -m app_store_rank_bot --history
+python3 -m app_store_rank_bot --rerun
+```
+
+Each rerun creates a new report in `reports/`, so you can compare rank changes over time.
+
 ## Run From a Config File
 
 You can also prepare a JSON file:
@@ -118,6 +146,8 @@ Use either command:
 ```bash
 python3 -m app_store_rank_bot --help
 python3 -m app_store_rank_bot /help
+python3 -m app_store_rank_bot /history
+python3 -m app_store_rank_bot /rerun
 ```
 
 ## Chatbot / Agent Usage
@@ -133,6 +163,12 @@ Recommended flow:
 5. Wait for the sequential checks to finish.
 6. Read the generated CSV from `reports/`.
 7. If needed, render the CSV as a Markdown table in chat.
+
+To repeat the previous keyword set from chat, run:
+
+```bash
+python3 -m app_store_rank_bot /rerun
+```
 
 For fully non-interactive chatbot runs, write a temporary JSON config and run:
 

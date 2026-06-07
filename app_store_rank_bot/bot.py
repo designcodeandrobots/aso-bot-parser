@@ -96,6 +96,40 @@ def save_checks(checks: list[Check], checked_at: str) -> Path:
     return path
 
 
+def saved_check_files() -> list[Path]:
+    if not CHECKS_DIR.exists():
+        return []
+    return sorted(CHECKS_DIR.glob("checks-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def latest_checks_file() -> Path | None:
+    files = saved_check_files()
+    return files[0] if files else None
+
+
+def print_history() -> None:
+    files = saved_check_files()
+    if not files:
+        print("No saved check sets found.")
+        return
+
+    print("Saved check sets:")
+    for index, path in enumerate(files, start=1):
+        checks = load_checks(path)
+        created_at = read_created_at(path)
+        app_ids = sorted({check.app_id for check in checks})
+        countries = sorted({check.country for check in checks})
+        print(
+            f"{index}. {path} | created_at={created_at} | "
+            f"apps={','.join(app_ids)} | countries={','.join(countries)} | keywords={len(checks)}"
+        )
+
+
+def read_created_at(path: Path) -> str:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return str(data.get("created_at") or "unknown")
+
+
 def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
     client = AppStoreClient()
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -214,6 +248,8 @@ def file_timestamp(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
+    parser.add_argument("--history", action="store_true", help="List saved check sets and exit.")
+    parser.add_argument("--rerun", action="store_true", help="Rerun the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
         "--format",
@@ -225,12 +261,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] == "/help":
-        sys.argv[1] = "--help"
+    slash_aliases = {
+        "/help": "--help",
+        "/history": "--history",
+        "/rerun": "--rerun",
+    }
+    if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
+        sys.argv[1] = slash_aliases[sys.argv[1]]
 
     args = build_parser().parse_args()
 
-    if args.config:
+    if args.history:
+        print_history()
+        return
+
+    if args.rerun:
+        checks_path = latest_checks_file()
+        if checks_path is None:
+            raise SystemExit("No saved check sets found. Run the interactive flow first.")
+        checks = load_checks(checks_path)
+        print(f"Rerunning latest saved checks: {checks_path}")
+    elif args.config:
         checks = load_checks(args.config)
         checks_path = args.config
     else:
