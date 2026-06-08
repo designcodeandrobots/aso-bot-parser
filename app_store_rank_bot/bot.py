@@ -247,7 +247,7 @@ def print_saved_positions(path: Path) -> None:
         print(f"No saved positions found in {path}.")
         return
 
-    rows.sort(key=rank_sort_key)
+    rows.sort(key=report_row_sort_key)
 
     print(f"Latest saved positions: {path}")
     print_markdown_table(
@@ -327,25 +327,29 @@ def print_position_change_table(rows: list[dict[str, str]], first_label: str, la
     for row in rows:
         grouped.setdefault((row["app_id"], row["country"], row["keyword"]), []).append(row)
 
-    table_rows: list[list[str]] = []
+    sortable_rows: list[tuple[tuple[object, ...], list[str]]] = []
     for (app_id, country, keyword), group_rows in grouped.items():
         group_rows.sort(key=lambda row: parse_checked_at(row["date"]))
         first = group_rows[0]
         last = group_rows[-1]
-        table_rows.append(
-            [
-                keyword,
-                first["rank"],
-                last["rank"],
-                rank_delta(first["rank"], last["rank"]),
-                country,
-                app_id,
-                first["date"],
-                last["date"],
-            ]
+        table_row = [
+            keyword,
+            first["rank"],
+            last["rank"],
+            rank_delta(first["rank"], last["rank"]),
+            country,
+            app_id,
+            first["date"],
+            last["date"],
+        ]
+        sortable_rows.append(
+            (
+                report_row_sort_key(last),
+                table_row,
+            )
         )
 
-    table_rows.sort(key=lambda row: rank_cell_sort_key(row[2]))
+    table_rows = [row for _, row in sorted(sortable_rows, key=lambda item: item[0])]
     print_markdown_table(
         ["keyword", first_label, last_label, "rank_delta", "country", "app_id", "first_date", "last_date"],
         table_rows,
@@ -398,10 +402,24 @@ def rank_sort_key(row: dict[str, str]) -> tuple[int, int | str]:
     return rank_cell_sort_key(row.get("rank", ""))
 
 
+def report_row_sort_key(row: dict[str, str]) -> tuple[object, ...]:
+    return (
+        *rank_cell_sort_key(row.get("rank", "")),
+        row.get("country", ""),
+        row.get("app_id", ""),
+        row.get("keyword", "").casefold(),
+    )
+
+
 def rank_cell_sort_key(rank: str) -> tuple[int, int | str]:
     if rank.isdigit():
         return (0, int(rank))
     return (1, rank)
+
+
+def result_sort_key(result: RankResult) -> tuple[object, ...]:
+    rank = str(result.rank) if result.rank is not None else "not found"
+    return (*rank_cell_sort_key(rank), result.country, result.app_id, result.keyword.casefold())
 
 
 def print_markdown_table(headers: list[str], rows: list[list[str]]) -> None:
@@ -492,7 +510,7 @@ def write_report(results: list[RankResult]) -> Path:
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(REPORT_HEADERS)
-        for result in results:
+        for result in sorted(results, key=result_sort_key):
             writer.writerow(
                 [
                     result.keyword,
@@ -515,7 +533,7 @@ def print_table(results: list[RankResult]) -> None:
             result.app_id,
             result.checked_at,
         ]
-        for result in results
+        for result in sorted(results, key=result_sort_key)
     ]
     writer = csv.writer(sys.stdout)
     writer.writerow(REPORT_HEADERS)
