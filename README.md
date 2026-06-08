@@ -20,7 +20,7 @@ It then scans the returned apps in order and compares each result's `trackId` wi
 
 - If the app is the first result, rank is `1`.
 - If the app is the tenth result, rank is `10`.
-- If the app is not found in the first 200 results, rank is `not found` in CSV output and `null` in JSON output.
+- If the app is not found in the first 200 results, rank is `-` in table/CSV output and `null` in JSON output.
 
 ## Installation
 
@@ -227,7 +227,7 @@ Reports are saved as CSV:
 ```text
 keyword,rank,country,app_id,date
 fitness tracker,12,US,284882215,2026-06-07T11:30:00+00:00
-workout,not found,US,284882215,2026-06-07T11:30:00+00:00
+workout,-,US,284882215,2026-06-07T11:30:00+00:00
 ```
 
 `date` is the UTC timestamp for the check run.

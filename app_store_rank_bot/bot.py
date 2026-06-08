@@ -255,7 +255,7 @@ def print_saved_positions(path: Path) -> None:
         [
             [
                 row.get("keyword", ""),
-                row.get("rank", ""),
+                rank_display(row.get("rank", "")),
                 row.get("country", ""),
                 row.get("app_id", ""),
                 row.get("date", ""),
@@ -279,47 +279,81 @@ def print_today_report() -> None:
 def print_week_report() -> None:
     end_date = date.today()
     dates = [end_date - timedelta(days=offset) for offset in range(6, -1, -1)]
-    date_set = set(dates)
-    rows = [
-        row
-        for row in load_report_rows(saved_report_files())
-        if local_date(row["date"]) in date_set
-    ]
-    if not rows:
-        print("No saved position reports found for the last 7 days.")
+    report_name = f"week-report-{dates[0].isoformat()}..{dates[-1].isoformat()}"
+    rows_by_day = latest_report_rows_by_day(dates)
+    if not rows_by_day:
+        print(f"Weekly report not ready: {report_name}")
+        print("Reason: no saved position reports found for the last 7 days.")
         return
 
-    latest_by_day: dict[tuple[str, str, str, date], dict[str, str]] = {}
-    for row in rows:
-        key = (row["app_id"], row["country"], row["keyword"], local_date(row["date"]))
-        current = latest_by_day.get(key)
-        if current is None or parse_checked_at(row["date"]) > parse_checked_at(current["date"]):
-            latest_by_day[key] = row
+    report_path = write_week_report(report_name, dates, rows_by_day)
+    print(f"Weekly report ready: {report_path}")
 
-    keys = sorted({(row["app_id"], row["country"], row["keyword"]) for row in rows}, key=lambda item: item[2])
-    sortable_rows: list[tuple[tuple[int, int | str], list[str]]] = []
-    for app_id, country, keyword in keys:
-        rank_by_date = {
-            report_date: latest_by_day[(app_id, country, keyword, report_date)]["rank"]
-            for report_date in dates
-            if (app_id, country, keyword, report_date) in latest_by_day
-        }
-        first_rank = next((rank_by_date[report_date] for report_date in dates if report_date in rank_by_date), "")
-        last_rank = next((rank_by_date[report_date] for report_date in reversed(dates) if report_date in rank_by_date), "")
-        sortable_rows.append(
-            (
-                rank_cell_sort_key(last_rank or "not found"),
-                [keyword, rank_delta(first_rank, last_rank), country, app_id]
-                + [rank_by_date.get(report_date, "") for report_date in dates],
-            )
-        )
 
-    table_rows = [row for _, row in sorted(sortable_rows, key=lambda item: item[0])]
-    print(f"Position changes for the last 7 days: {dates[0].isoformat()}..{dates[-1].isoformat()}")
-    print_markdown_table(
-        ["keyword", "rank_delta", "country", "app_id"] + [report_date.isoformat() for report_date in dates],
-        table_rows,
+def latest_report_rows_by_day(dates: list[date]) -> dict[date, list[dict[str, str]]]:
+    date_set = set(dates)
+    latest_by_day: dict[date, tuple[float, list[dict[str, str]]]] = {}
+
+    for path in saved_report_files():
+        rows = load_report_rows([path])
+        if not rows:
+            continue
+
+        mtime = path.stat().st_mtime
+        rows_for_file_by_day: dict[date, list[dict[str, str]]] = {}
+        for row in rows:
+            report_date = local_date(row["date"])
+            if report_date in date_set:
+                rows_for_file_by_day.setdefault(report_date, []).append(row)
+
+        for report_date, rows_for_day in rows_for_file_by_day.items():
+            current = latest_by_day.get(report_date)
+            if current is None or mtime > current[0]:
+                latest_by_day[report_date] = (mtime, rows_for_day)
+
+    return {report_date: rows for report_date, (_, rows) in latest_by_day.items()}
+
+
+def write_week_report(report_name: str, dates: list[date], rows_by_day: dict[date, list[dict[str, str]]]) -> Path:
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = REPORTS_DIR / f"{report_name}.csv"
+    latest_row_by_day_and_key: dict[tuple[date, str, str, str], dict[str, str]] = {}
+
+    for report_date, rows in rows_by_day.items():
+        for row in rows:
+            key = (report_date, row["keyword"], row["country"], row["app_id"])
+            current = latest_row_by_day_and_key.get(key)
+            if current is None or parse_checked_at(row["date"]) > parse_checked_at(current["date"]):
+                latest_row_by_day_and_key[key] = row
+
+    keys = sorted(
+        {
+            (row["keyword"], row["country"], row["app_id"])
+            for rows in rows_by_day.values()
+            for row in rows
+        },
+        key=lambda item: (item[0].casefold(), item[1], item[2]),
     )
+
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["keyword", "country", "app_id"] + [report_date.isoformat() for report_date in dates])
+        for keyword, country, app_id in keys:
+            writer.writerow(
+                [keyword, country, app_id]
+                + [
+                    week_rank_cell(latest_row_by_day_and_key.get((report_date, keyword, country, app_id)))
+                    for report_date in dates
+                ]
+            )
+
+    return path
+
+
+def week_rank_cell(row: dict[str, str] | None) -> str:
+    if row is None:
+        return "-"
+    return rank_display(row.get("rank", "-"))
 
 
 def print_position_change_table(rows: list[dict[str, str]], first_label: str, last_label: str) -> None:
@@ -334,8 +368,8 @@ def print_position_change_table(rows: list[dict[str, str]], first_label: str, la
         last = group_rows[-1]
         table_row = [
             keyword,
-            first["rank"],
-            last["rank"],
+            rank_display(first["rank"]),
+            rank_display(last["rank"]),
             rank_delta(first["rank"], last["rank"]),
             country,
             app_id,
@@ -369,7 +403,7 @@ def load_report_rows(paths: list[Path]) -> list[dict[str, str]]:
                             "app_id": row.get("app_id", ""),
                             "country": row.get("country", ""),
                             "keyword": row.get("keyword", ""),
-                            "rank": row.get("rank", "not found"),
+                            "rank": rank_display(row.get("rank", "-")),
                         }
                     )
     return rows
@@ -398,6 +432,13 @@ def rank_number(value: str) -> int | None:
     return int(value) if value.isdigit() else None
 
 
+def rank_display(value: object) -> str:
+    rank = str(value).strip()
+    if not rank or rank in {"None", "not found"}:
+        return "-"
+    return rank
+
+
 def rank_sort_key(row: dict[str, str]) -> tuple[int, int | str]:
     return rank_cell_sort_key(row.get("rank", ""))
 
@@ -418,7 +459,7 @@ def rank_cell_sort_key(rank: str) -> tuple[int, int | str]:
 
 
 def result_sort_key(result: RankResult) -> tuple[object, ...]:
-    rank = str(result.rank) if result.rank is not None else "not found"
+    rank = rank_display(result.rank)
     return (*rank_cell_sort_key(rank), result.country, result.app_id, result.keyword.casefold())
 
 
@@ -514,7 +555,7 @@ def write_report(results: list[RankResult]) -> Path:
             writer.writerow(
                 [
                     result.keyword,
-                    result.rank if result.rank is not None else "not found",
+                    rank_display(result.rank),
                     result.country,
                     result.app_id,
                     result.checked_at,
@@ -528,7 +569,7 @@ def print_table(results: list[RankResult]) -> None:
     rows = [
         [
             result.keyword,
-            str(result.rank) if result.rank is not None else "not found",
+            rank_display(result.rank),
             result.country,
             result.app_id,
             result.checked_at,
