@@ -17,6 +17,7 @@ from typing import Any
 APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
 CHECKS_DIR = Path("checks")
 REPORTS_DIR = Path("reports")
+APP_ID_FILE = CHECKS_DIR / "app.json"
 DEFAULT_DELAY_SECONDS = 1.0
 REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
 
@@ -98,6 +99,55 @@ def save_checks(checks: list[Check], checked_at: str) -> Path:
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def load_active_app_id() -> str | None:
+    if not APP_ID_FILE.exists():
+        return None
+
+    data = json.loads(APP_ID_FILE.read_text(encoding="utf-8"))
+    app_id = str(data.get("app_id", "")).strip()
+    if not app_id.isdigit():
+        return None
+    return app_id
+
+
+def save_active_app_id(app_id: str) -> Path:
+    CHECKS_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "app_id": app_id,
+        "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    APP_ID_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return APP_ID_FILE
+
+
+def ensure_active_app_id() -> str:
+    app_id = load_active_app_id()
+    if app_id is not None:
+        return app_id
+
+    print("No saved app_id found. Add app_id to continue.")
+    app_id = ask_app_id()
+    path = save_active_app_id(app_id)
+    print(f"App saved: {path}")
+    return app_id
+
+
+def delete_active_app_id() -> bool:
+    app_id = load_active_app_id()
+    if app_id is None:
+        print("No saved app_id found.")
+        return False
+
+    confirmation = input(f"Are you sure you want to delete app_id={app_id}? Type YES to confirm: ").strip()
+    if confirmation != "YES":
+        print("Delete cancelled.")
+        return False
+
+    APP_ID_FILE.unlink()
+    print("App deleted. Restarting...")
+    return True
 
 
 def saved_check_files() -> list[Path]:
@@ -539,6 +589,14 @@ def add_keywords(path: Path) -> Path:
     return updated_path
 
 
+def add_keywords_or_create_first_set(app_id: str) -> Path:
+    path = latest_checks_file()
+    if path is None:
+        print("No saved check sets found. Creating the first keyword set.")
+        return create_check_set_for_app(app_id)
+    return add_keywords(path)
+
+
 def run_checks(checks: list[Check], limit: int, delay_seconds: float) -> list[RankResult]:
     client = AppStoreClient()
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -628,8 +686,8 @@ def check_positions(checks: list[Check], limit: int, output_format: str, delay_s
     return report_path
 
 
-def create_new_check_set() -> Path:
-    checks = ask_checks()
+def create_check_set_for_app(app_id: str) -> Path:
+    checks = ask_checks_for_app(app_id)
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     checks_path = save_checks(checks, checked_at)
     print(f"\nChecks saved: {checks_path}")
@@ -638,19 +696,21 @@ def create_new_check_set() -> Path:
 
 def run_menu(args: argparse.Namespace) -> None:
     while True:
+        app_id = ensure_active_app_id()
         print("\nASO Bot Parser")
-        print("1. Create new check set")
-        print("2. Show keywords")
-        print("3. Add keywords")
-        print("4. Update keywords")
-        print("5. Show geo list")
-        print("6. Add geo")
-        print("7. Delete geo")
-        print("8. Check new positions")
-        print("9. Show last report")
-        print("10. Show today report")
-        print("11. Show week report")
-        print("12. Show monthly report")
+        print(f"Active app_id: {app_id}")
+        print("1. Show keywords")
+        print("2. Add keywords")
+        print("3. Update keywords")
+        print("4. Show geo list")
+        print("5. Add geo")
+        print("6. Delete geo")
+        print("7. Check new positions")
+        print("8. Show last report")
+        print("9. Show today report")
+        print("10. Show week report")
+        print("11. Show monthly report")
+        print("12. Delete app")
         print("13. Show logs")
         print("0. Exit")
 
@@ -661,31 +721,32 @@ def run_menu(args: argparse.Namespace) -> None:
             print("Bye.")
             return
         if choice == "1":
-            create_new_check_set()
-        elif choice == "2":
             print_keywords(require_latest_checks_file())
+        elif choice == "2":
+            add_keywords_or_create_first_set(app_id)
         elif choice == "3":
-            add_keywords(require_latest_checks_file())
-        elif choice == "4":
             update_keywords(require_latest_checks_file())
-        elif choice == "5":
+        elif choice == "4":
             print_geo_list(require_latest_checks_file())
-        elif choice == "6":
+        elif choice == "5":
             add_geo(require_latest_checks_file())
-        elif choice == "7":
+        elif choice == "6":
             delete_geo(require_latest_checks_file())
-        elif choice == "8":
+        elif choice == "7":
             checks_path = require_latest_checks_file()
             print(f"Checking latest saved keywords: {checks_path}")
             check_positions(load_checks(checks_path), args.limit, args.format, args.delay_seconds)
-        elif choice == "9":
+        elif choice == "8":
             print_saved_positions(require_latest_report_file())
-        elif choice == "10":
+        elif choice == "9":
             print_today_report()
-        elif choice == "11":
+        elif choice == "10":
             print_week_report()
-        elif choice == "12":
+        elif choice == "11":
             print_month_report()
+        elif choice == "12":
+            if delete_active_app_id():
+                continue
         elif choice == "13":
             print_history()
         else:
@@ -694,14 +755,13 @@ def run_menu(args: argparse.Namespace) -> None:
         input("\nPress Enter to continue...")
 
 
-def ask_checks() -> list[Check]:
-    print("Step 1. App")
-    app_id = ask_app_id()
+def ask_checks_for_app(app_id: str) -> list[Check]:
+    print(f"App: {app_id}")
 
-    print("\nStep 2. Country")
+    print("\nStep 1. Country")
     country = ask_country()
 
-    print("\nStep 3. Keywords")
+    print("\nStep 2. Keywords")
     keywords = ask_keywords()
 
     return [Check(app_id=app_id, country=country, keyword=keyword) for keyword in keywords]
@@ -760,6 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--add-geo", action="store_true", help="Add one country to the latest saved check set.")
     parser.add_argument("--add-keywords", action="store_true", help="Append keywords to the latest saved check set.")
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
+    parser.add_argument("--delete-app", action="store_true", help="Delete the saved app_id after confirmation.")
     parser.add_argument("--delete-geo", action="store_true", help="Remove one country from the active check set without deleting history.")
     parser.add_argument("--show-logs", action="store_true", help="List saved check sets and exit.")
     parser.add_argument("--show-geo-list", action="store_true", help="Print active countries in the latest saved check set and exit.")
@@ -790,6 +851,7 @@ def main() -> None:
         "/add-geo": "--add-geo",
         "/add-keywords": "--add-keywords",
         "/check-new-positions": "--check-new-positions",
+        "/delete-app": "--delete-app",
         "/delete-geo": "--delete-geo",
         "/help": "--help",
         "/show-geo-list": "--show-geo-list",
@@ -810,6 +872,8 @@ def main() -> None:
         run_menu(args)
         return
 
+    app_id = ensure_active_app_id()
+
     if args.show_logs:
         print_history()
         return
@@ -827,7 +891,12 @@ def main() -> None:
         return
 
     if args.add_keywords:
-        add_keywords(require_latest_checks_file())
+        add_keywords_or_create_first_set(app_id)
+        return
+
+    if args.delete_app:
+        if delete_active_app_id():
+            ensure_active_app_id()
         return
 
     if args.delete_geo:
@@ -862,7 +931,7 @@ def main() -> None:
         checks = load_checks(args.config)
         checks_path = args.config
     else:
-        checks_path = create_new_check_set()
+        checks_path = create_check_set_for_app(app_id)
         checks = load_checks(checks_path)
 
     check_positions(checks, args.limit, args.format, args.delay_seconds)

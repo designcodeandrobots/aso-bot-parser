@@ -56,27 +56,31 @@ You will see:
 
 ```text
 ASO Bot Parser
-1. Create new check set
-2. Show keywords
-3. Add keywords
-4. Update keywords
-5. Show geo list
-6. Add geo
-7. Delete geo
-8. Check new positions
-9. Show last report
-10. Show today report
-11. Show week report
-12. Show monthly report
+Active app_id: 6443812062
+1. Show keywords
+2. Add keywords
+3. Update keywords
+4. Show geo list
+5. Add geo
+6. Delete geo
+7. Check new positions
+8. Show last report
+9. Show today report
+10. Show week report
+11. Show monthly report
+12. Delete app
 13. Show logs
 0. Exit
 ```
 
-Choose `1` to create a new check set. The CLI asks for:
+On first launch, the CLI checks `checks/app.json`. If no saved app ID exists, it asks for:
 
 1. The App Store `app_id`
-2. The target country
-3. All keywords in one line, separated by commas or semicolons
+
+After the app ID is saved, choose `2` to add keywords. The CLI asks for:
+
+1. The target country
+2. All keywords in one line, separated by commas or semicolons
 
 Example keyword input:
 
@@ -152,6 +156,7 @@ Slash commands are convenient when the tool is driven from chat:
 | `/add-geo` | Add one country to the active check set, then enter keywords for that country. |
 | `/add-keywords` | Append keywords to the latest saved check set. |
 | `/check-new-positions` | Check positions for the latest saved keyword list. |
+| `/delete-app` | Delete the saved app ID after confirmation. |
 | `/delete-geo` | Remove one country from the active check set after confirmation. Previous files are not deleted. |
 | `/show-geo-list` | Print active countries in the latest saved check set. |
 | `/show-keywords` | Print the latest saved keyword list. |
@@ -173,6 +178,7 @@ python3 -m app_store_rank_bot /show-report-last
 python3 -m app_store_rank_bot /show-report-today
 python3 -m app_store_rank_bot /show-report-week
 python3 -m app_store_rank_bot /show-report-month
+python3 -m app_store_rank_bot /delete-app
 python3 -m app_store_rank_bot /update-keywords
 python3 -m app_store_rank_bot /delete-geo
 python3 -m app_store_rank_bot /check-new-positions
@@ -190,6 +196,7 @@ python3 -m app_store_rank_bot --show-report-last
 python3 -m app_store_rank_bot --show-report-today
 python3 -m app_store_rank_bot --show-report-week
 python3 -m app_store_rank_bot --show-report-month
+python3 -m app_store_rank_bot --delete-app
 python3 -m app_store_rank_bot --update-keywords
 python3 -m app_store_rank_bot --delete-geo
 python3 -m app_store_rank_bot --check-new-positions
@@ -252,6 +259,7 @@ python3 -m app_store_rank_bot /show-report-last
 python3 -m app_store_rank_bot /show-report-today
 python3 -m app_store_rank_bot /show-report-week
 python3 -m app_store_rank_bot /show-report-month
+python3 -m app_store_rank_bot /delete-app
 python3 -m app_store_rank_bot /update-keywords
 python3 -m app_store_rank_bot /delete-geo
 python3 -m app_store_rank_bot /check-new-positions
@@ -264,12 +272,13 @@ This project is designed to be easy to drive from a chat-based coding agent or c
 Recommended flow:
 
 1. Start the CLI with `python3 -m app_store_rank_bot`.
-2. When the app asks for `app_id`, send the numeric app ID.
-3. When the app asks for country, send the 2-letter country code.
-4. When the app asks for keywords, send all keywords in one message separated by commas or semicolons.
-5. Wait for the sequential checks to finish.
-6. Read the generated CSV from `reports/`.
-7. If needed, render the CSV as a Markdown table in chat.
+2. If no saved app ID exists, send the numeric App Store app ID once.
+3. Choose the action you need from the menu.
+4. When the app asks for country, send the 2-letter country code.
+5. When the app asks for keywords, send all keywords in one message separated by commas or semicolons.
+6. Wait for the sequential checks to finish.
+7. Read the generated CSV from `reports/`.
+8. If needed, render the CSV as a Markdown table in chat.
 
 To repeat the previous keyword set from chat, run:
 

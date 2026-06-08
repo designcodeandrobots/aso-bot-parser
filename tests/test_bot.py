@@ -21,6 +21,76 @@ class FixedDate(date):
 
 
 class ReportFormatTests(unittest.TestCase):
+    def test_save_and_load_active_app_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            original_app_id_file = bot.APP_ID_FILE
+            bot.CHECKS_DIR = Path(temp_dir)
+            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
+            try:
+                path = bot.save_active_app_id("123456")
+                app_id = bot.load_active_app_id()
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+                bot.APP_ID_FILE = original_app_id_file
+
+        self.assertEqual(path.name, "app.json")
+        self.assertEqual(app_id, "123456")
+
+    def test_ensure_active_app_id_prompts_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            original_app_id_file = bot.APP_ID_FILE
+            bot.CHECKS_DIR = Path(temp_dir)
+            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
+            try:
+                output = io.StringIO()
+                with patch("builtins.input", return_value="123456"):
+                    with contextlib.redirect_stdout(output):
+                        app_id = bot.ensure_active_app_id()
+                saved_app_id = bot.load_active_app_id()
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+                bot.APP_ID_FILE = original_app_id_file
+
+        self.assertEqual(app_id, "123456")
+        self.assertEqual(saved_app_id, "123456")
+        self.assertIn("No saved app_id found.", output.getvalue())
+
+    def test_delete_active_app_id_requires_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            original_app_id_file = bot.APP_ID_FILE
+            bot.CHECKS_DIR = Path(temp_dir)
+            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
+            try:
+                bot.save_active_app_id("123456")
+                with patch("builtins.input", return_value="YES"):
+                    deleted = bot.delete_active_app_id()
+                app_id = bot.load_active_app_id()
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+                bot.APP_ID_FILE = original_app_id_file
+
+        self.assertTrue(deleted)
+        self.assertIsNone(app_id)
+
+    def test_add_keywords_creates_first_check_set_when_none_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            original_app_id_file = bot.APP_ID_FILE
+            bot.CHECKS_DIR = Path(temp_dir)
+            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
+            try:
+                with patch("builtins.input", side_effect=["US", "ai chat"]):
+                    path = bot.add_keywords_or_create_first_set("123456")
+                checks = bot.load_checks(path)
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+                bot.APP_ID_FILE = original_app_id_file
+
+        self.assertEqual(checks, [bot.Check(app_id="123456", country="US", keyword="ai chat")])
+
     def test_write_report_uses_public_column_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             original_reports_dir = bot.REPORTS_DIR
