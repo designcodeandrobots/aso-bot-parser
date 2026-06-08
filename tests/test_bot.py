@@ -366,6 +366,101 @@ class ReportFormatTests(unittest.TestCase):
         self.assertIn("Weekly report not ready: week-report-2026-06-02..2026-06-08", output.getvalue())
         self.assertIn("Reason: no saved position reports found for the last 7 days.", output.getvalue())
 
+    def test_print_month_report_prints_ready_message_with_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_reports_dir = bot.REPORTS_DIR
+            bot.REPORTS_DIR = Path(temp_dir)
+            try:
+                for day in (1, 8):
+                    report_date = f"2026-06-{day:02d}T08:00:00+00:00"
+                    report_path = bot.REPORTS_DIR / f"positions-202606{day:02d}T080000Z.csv"
+                    report_path.write_text(
+                        "keyword,rank,country,app_id,date\n"
+                        f"ai chat,{day},US,123456,{report_date}\n",
+                        encoding="utf-8",
+                    )
+
+                output = io.StringIO()
+                with patch.object(bot, "date", FixedDate):
+                    with contextlib.redirect_stdout(output):
+                        bot.print_month_report()
+            finally:
+                bot.REPORTS_DIR = original_reports_dir
+
+            monthly_report_path = Path(temp_dir) / "month-report-2026-06-01..2026-06-08.csv"
+            with monthly_report_path.open("r", encoding="utf-8", newline="") as file:
+                rows = list(csv.reader(file))
+
+        self.assertEqual(output.getvalue(), f"Monthly report ready: {monthly_report_path}\n")
+        self.assertEqual(
+            rows,
+            [
+                [
+                    "keyword",
+                    "country",
+                    "app_id",
+                    "2026-06-01",
+                    "2026-06-02",
+                    "2026-06-03",
+                    "2026-06-04",
+                    "2026-06-05",
+                    "2026-06-06",
+                    "2026-06-07",
+                    "2026-06-08",
+                ],
+                ["ai chat", "US", "123456", "1", "-", "-", "-", "-", "-", "-", "8"],
+            ],
+        )
+
+    def test_print_month_report_uses_latest_report_file_for_day(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_reports_dir = bot.REPORTS_DIR
+            bot.REPORTS_DIR = Path(temp_dir)
+            try:
+                older_report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
+                older_report_path.write_text(
+                    "keyword,rank,country,app_id,date\n"
+                    "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
+                    encoding="utf-8",
+                )
+                newer_report_path = bot.REPORTS_DIR / "positions-20260608T090000Z.csv"
+                newer_report_path.write_text(
+                    "keyword,rank,country,app_id,date\n"
+                    "ai chat,2,US,123456,2026-06-08T09:00:00+00:00\n",
+                    encoding="utf-8",
+                )
+                os.utime(older_report_path, (1, 1))
+                os.utime(newer_report_path, (2, 2))
+
+                output = io.StringIO()
+                with patch.object(bot, "date", FixedDate):
+                    with contextlib.redirect_stdout(output):
+                        bot.print_month_report()
+            finally:
+                bot.REPORTS_DIR = original_reports_dir
+
+            monthly_report_path = Path(temp_dir) / "month-report-2026-06-01..2026-06-08.csv"
+            with monthly_report_path.open("r", encoding="utf-8", newline="") as file:
+                rows = list(csv.reader(file))
+
+        self.assertEqual(output.getvalue(), f"Monthly report ready: {monthly_report_path}\n")
+        self.assertEqual(rows[1], ["ai chat", "US", "123456", "-", "-", "-", "-", "-", "-", "-", "2"])
+
+    def test_print_month_report_explains_no_reports_for_month(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_reports_dir = bot.REPORTS_DIR
+            bot.REPORTS_DIR = Path(temp_dir)
+            try:
+                output = io.StringIO()
+                with patch.object(bot, "date", FixedDate):
+                    with contextlib.redirect_stdout(output):
+                        bot.print_month_report()
+            finally:
+                bot.REPORTS_DIR = original_reports_dir
+
+        self.assertIn("Monthly report not ready: month-report-2026-06-01..2026-06-08", output.getvalue())
+        self.assertIn("Reason: no saved position reports found for the current month.", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

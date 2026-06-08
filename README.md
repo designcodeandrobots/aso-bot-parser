@@ -67,7 +67,8 @@ ASO Bot Parser
 9. Show last report
 10. Show today report
 11. Show week report
-12. Show logs
+12. Show monthly report
+13. Show logs
 0. Exit
 ```
 
@@ -157,6 +158,7 @@ Slash commands are convenient when the tool is driven from chat:
 | `/show-report-last` | Print the latest saved positions report as a table. |
 | `/show-report-today` | Print today's rank changes from saved reports. |
 | `/show-report-week` | Print rank changes for the last 7 days from saved reports. |
+| `/show-report-month` | Create this month's rank report from saved reports. |
 | `/update-keywords` | Replace keywords for the latest saved app/country pair. |
 | `/show-logs` | Show saved check sets. |
 
@@ -170,6 +172,7 @@ python3 -m app_store_rank_bot /show-geo-list
 python3 -m app_store_rank_bot /show-report-last
 python3 -m app_store_rank_bot /show-report-today
 python3 -m app_store_rank_bot /show-report-week
+python3 -m app_store_rank_bot /show-report-month
 python3 -m app_store_rank_bot /update-keywords
 python3 -m app_store_rank_bot /delete-geo
 python3 -m app_store_rank_bot /check-new-positions
@@ -186,6 +189,7 @@ python3 -m app_store_rank_bot --show-geo-list
 python3 -m app_store_rank_bot --show-report-last
 python3 -m app_store_rank_bot --show-report-today
 python3 -m app_store_rank_bot --show-report-week
+python3 -m app_store_rank_bot --show-report-month
 python3 -m app_store_rank_bot --update-keywords
 python3 -m app_store_rank_bot --delete-geo
 python3 -m app_store_rank_bot --check-new-positions
@@ -247,6 +251,7 @@ python3 -m app_store_rank_bot /show-keywords
 python3 -m app_store_rank_bot /show-report-last
 python3 -m app_store_rank_bot /show-report-today
 python3 -m app_store_rank_bot /show-report-week
+python3 -m app_store_rank_bot /show-report-month
 python3 -m app_store_rank_bot /update-keywords
 python3 -m app_store_rank_bot /delete-geo
 python3 -m app_store_rank_bot /check-new-positions

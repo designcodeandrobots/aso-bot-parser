@@ -286,8 +286,27 @@ def print_week_report() -> None:
         print("Reason: no saved position reports found for the last 7 days.")
         return
 
-    report_path = write_week_report(report_name, dates, rows_by_day)
+    report_path = write_period_report(report_name, dates, rows_by_day)
     print(f"Weekly report ready: {report_path}")
+
+
+def print_month_report() -> None:
+    dates = current_month_dates()
+    report_name = f"month-report-{dates[0].isoformat()}..{dates[-1].isoformat()}"
+    rows_by_day = latest_report_rows_by_day(dates)
+    if not rows_by_day:
+        print(f"Monthly report not ready: {report_name}")
+        print("Reason: no saved position reports found for the current month.")
+        return
+
+    report_path = write_period_report(report_name, dates, rows_by_day)
+    print(f"Monthly report ready: {report_path}")
+
+
+def current_month_dates() -> list[date]:
+    today = date.today()
+    first_day = today.replace(day=1)
+    return [first_day + timedelta(days=offset) for offset in range(today.day)]
 
 
 def latest_report_rows_by_day(dates: list[date]) -> dict[date, list[dict[str, str]]]:
@@ -314,7 +333,7 @@ def latest_report_rows_by_day(dates: list[date]) -> dict[date, list[dict[str, st
     return {report_date: rows for report_date, (_, rows) in latest_by_day.items()}
 
 
-def write_week_report(report_name: str, dates: list[date], rows_by_day: dict[date, list[dict[str, str]]]) -> Path:
+def write_period_report(report_name: str, dates: list[date], rows_by_day: dict[date, list[dict[str, str]]]) -> Path:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORTS_DIR / f"{report_name}.csv"
     latest_row_by_day_and_key: dict[tuple[date, str, str, str], dict[str, str]] = {}
@@ -342,7 +361,7 @@ def write_week_report(report_name: str, dates: list[date], rows_by_day: dict[dat
             writer.writerow(
                 [keyword, country, app_id]
                 + [
-                    week_rank_cell(latest_row_by_day_and_key.get((report_date, keyword, country, app_id)))
+                    period_rank_cell(latest_row_by_day_and_key.get((report_date, keyword, country, app_id)))
                     for report_date in dates
                 ]
             )
@@ -350,7 +369,7 @@ def write_week_report(report_name: str, dates: list[date], rows_by_day: dict[dat
     return path
 
 
-def week_rank_cell(row: dict[str, str] | None) -> str:
+def period_rank_cell(row: dict[str, str] | None) -> str:
     if row is None:
         return "-"
     return rank_display(row.get("rank", "-"))
@@ -631,7 +650,8 @@ def run_menu(args: argparse.Namespace) -> None:
         print("9. Show last report")
         print("10. Show today report")
         print("11. Show week report")
-        print("12. Show logs")
+        print("12. Show monthly report")
+        print("13. Show logs")
         print("0. Exit")
 
         choice = input("Choose action: ").strip()
@@ -665,6 +685,8 @@ def run_menu(args: argparse.Namespace) -> None:
         elif choice == "11":
             print_week_report()
         elif choice == "12":
+            print_month_report()
+        elif choice == "13":
             print_history()
         else:
             print("Unknown action. Choose a number from the menu.")
@@ -745,6 +767,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-report-last", action="store_true", help="Print the latest saved positions report and exit.")
     parser.add_argument("--show-report-today", action="store_true", help="Print today's saved position changes and exit.")
     parser.add_argument("--show-report-week", action="store_true", help="Print saved position changes for the last 7 days and exit.")
+    parser.add_argument("--show-report-month", action="store_true", help="Create this month's saved position report and exit.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
@@ -773,6 +796,7 @@ def main() -> None:
         "/show-keywords": "--show-keywords",
         "/show-logs": "--show-logs",
         "/show-report-last": "--show-report-last",
+        "/show-report-month": "--show-report-month",
         "/show-report-today": "--show-report-today",
         "/show-report-week": "--show-report-week",
         "/update-keywords": "--update-keywords",
@@ -820,6 +844,10 @@ def main() -> None:
 
     if args.show_report_week:
         print_week_report()
+        return
+
+    if args.show_report_month:
+        print_month_report()
         return
 
     if args.update_keywords:
