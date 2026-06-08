@@ -18,6 +18,7 @@ APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
 CHECKS_DIR = Path("checks")
 REPORTS_DIR = Path("reports")
 DEFAULT_DELAY_SECONDS = 1.0
+REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
 
 
 @dataclass(frozen=True)
@@ -240,8 +241,7 @@ def delete_geo(path: Path) -> Path:
 
 
 def print_saved_positions(path: Path) -> None:
-    with path.open("r", encoding="utf-8", newline="") as file:
-        rows = list(csv.DictReader(file))
+    rows = load_report_rows([path])
 
     if not rows:
         print(f"No saved positions found in {path}.")
@@ -251,14 +251,14 @@ def print_saved_positions(path: Path) -> None:
 
     print(f"Latest saved positions: {path}")
     print_markdown_table(
-        ["keyword", "rank", "country", "app_id", "checked_at"],
+        REPORT_HEADERS,
         [
             [
                 row.get("keyword", ""),
                 row.get("rank", ""),
                 row.get("country", ""),
                 row.get("app_id", ""),
-                row.get("checked_at", ""),
+                row.get("date", ""),
             ]
             for row in rows
         ],
@@ -267,7 +267,7 @@ def print_saved_positions(path: Path) -> None:
 
 def print_today_report() -> None:
     today = date.today()
-    rows = [row for row in load_report_rows(saved_report_files()) if local_date(row["checked_at"]) == today]
+    rows = [row for row in load_report_rows(saved_report_files()) if local_date(row["date"]) == today]
     if not rows:
         print("No saved position reports found for today.")
         return
@@ -283,7 +283,7 @@ def print_week_report() -> None:
     rows = [
         row
         for row in load_report_rows(saved_report_files())
-        if local_date(row["checked_at"]) in date_set
+        if local_date(row["date"]) in date_set
     ]
     if not rows:
         print("No saved position reports found for the last 7 days.")
@@ -291,9 +291,9 @@ def print_week_report() -> None:
 
     latest_by_day: dict[tuple[str, str, str, date], dict[str, str]] = {}
     for row in rows:
-        key = (row["app_id"], row["country"], row["keyword"], local_date(row["checked_at"]))
+        key = (row["app_id"], row["country"], row["keyword"], local_date(row["date"]))
         current = latest_by_day.get(key)
-        if current is None or parse_checked_at(row["checked_at"]) > parse_checked_at(current["checked_at"]):
+        if current is None or parse_checked_at(row["date"]) > parse_checked_at(current["date"]):
             latest_by_day[key] = row
 
     keys = sorted({(row["app_id"], row["country"], row["keyword"]) for row in rows}, key=lambda item: item[2])
@@ -329,7 +329,7 @@ def print_position_change_table(rows: list[dict[str, str]], first_label: str, la
 
     table_rows: list[list[str]] = []
     for (app_id, country, keyword), group_rows in grouped.items():
-        group_rows.sort(key=lambda row: parse_checked_at(row["checked_at"]))
+        group_rows.sort(key=lambda row: parse_checked_at(row["date"]))
         first = group_rows[0]
         last = group_rows[-1]
         table_rows.append(
@@ -340,14 +340,14 @@ def print_position_change_table(rows: list[dict[str, str]], first_label: str, la
                 rank_delta(first["rank"], last["rank"]),
                 country,
                 app_id,
-                first["checked_at"],
-                last["checked_at"],
+                first["date"],
+                last["date"],
             ]
         )
 
     table_rows.sort(key=lambda row: rank_cell_sort_key(row[2]))
     print_markdown_table(
-        ["keyword", first_label, last_label, "rank_delta", "country", "app_id", "first_checked_at", "last_checked_at"],
+        ["keyword", first_label, last_label, "rank_delta", "country", "app_id", "first_date", "last_date"],
         table_rows,
     )
 
@@ -357,10 +357,11 @@ def load_report_rows(paths: list[Path]) -> list[dict[str, str]]:
     for path in paths:
         with path.open("r", encoding="utf-8", newline="") as file:
             for row in csv.DictReader(file):
-                if row.get("checked_at") and row.get("app_id") and row.get("country") and row.get("keyword"):
+                report_date = row.get("date") or row.get("checked_at")
+                if report_date and row.get("app_id") and row.get("country") and row.get("keyword"):
                     rows.append(
                         {
-                            "checked_at": row.get("checked_at", ""),
+                            "date": report_date,
                             "app_id": row.get("app_id", ""),
                             "country": row.get("country", ""),
                             "keyword": row.get("keyword", ""),
@@ -490,15 +491,15 @@ def write_report(results: list[RankResult]) -> Path:
 
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["checked_at", "app_id", "country", "keyword", "rank"])
+        writer.writerow(REPORT_HEADERS)
         for result in results:
             writer.writerow(
                 [
-                    result.checked_at,
-                    result.app_id,
-                    result.country,
                     result.keyword,
                     result.rank if result.rank is not None else "not found",
+                    result.country,
+                    result.app_id,
+                    result.checked_at,
                 ]
             )
 
@@ -508,16 +509,16 @@ def write_report(results: list[RankResult]) -> Path:
 def print_table(results: list[RankResult]) -> None:
     rows = [
         [
-            result.checked_at,
-            result.app_id,
-            result.country,
             result.keyword,
             str(result.rank) if result.rank is not None else "not found",
+            result.country,
+            result.app_id,
+            result.checked_at,
         ]
         for result in results
     ]
     writer = csv.writer(sys.stdout)
-    writer.writerow(["checked_at", "app_id", "country", "keyword", "rank"])
+    writer.writerow(REPORT_HEADERS)
     writer.writerows(rows)
 
 
@@ -528,7 +529,7 @@ def print_json(results: list[RankResult]) -> None:
             "country": result.country,
             "keyword": result.keyword,
             "rank": result.rank,
-            "checked_at": result.checked_at,
+            "date": result.checked_at,
         }
         for result in results
     ]

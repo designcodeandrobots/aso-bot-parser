@@ -225,12 +225,12 @@ python3 -m app_store_rank_bot checks.example.json --format json
 Reports are saved as CSV:
 
 ```text
-checked_at,app_id,country,keyword,rank
-2026-06-07T11:30:00+00:00,284882215,US,fitness tracker,12
-2026-06-07T11:30:00+00:00,284882215,US,workout,not found
+keyword,rank,country,app_id,date
+fitness tracker,12,US,284882215,2026-06-07T11:30:00+00:00
+workout,not found,US,284882215,2026-06-07T11:30:00+00:00
 ```
 
-`checked_at` is the UTC timestamp for the check run.
+`date` is the UTC timestamp for the check run.
 
 ## Help
 
