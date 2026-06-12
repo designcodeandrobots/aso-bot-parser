@@ -38,8 +38,16 @@ class RankResult:
     checked_at: str
 
 
+@dataclass(frozen=True)
+class AppSearchResult:
+    position: int
+    app_id: str
+    app_name: str
+    developer: str
+
+
 class AppStoreClient:
-    def find_rank(self, app_id: str, country: str, keyword: str, limit: int = 200) -> int | None:
+    def search_payload(self, country: str, keyword: str, limit: int) -> dict[str, Any]:
         query = urllib.parse.urlencode(
             {
                 "term": keyword,
@@ -54,12 +62,29 @@ class AppStoreClient:
         )
 
         with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
+
+    def find_rank(self, app_id: str, country: str, keyword: str, limit: int = 200) -> int | None:
+        payload = self.search_payload(country, keyword, limit)
 
         for index, item in enumerate(payload.get("results", []), start=1):
             if str(item.get("trackId")) == app_id:
                 return index
         return None
+
+    def search_apps(self, country: str, keyword: str, limit: int = 10) -> list[AppSearchResult]:
+        payload = self.search_payload(country, keyword, limit)
+        results: list[AppSearchResult] = []
+        for index, item in enumerate(payload.get("results", []), start=1):
+            results.append(
+                AppSearchResult(
+                    position=index,
+                    app_id=str(item.get("trackId", "")),
+                    app_name=str(item.get("trackName", "")),
+                    developer=str(item.get("artistName", "")),
+                )
+            )
+        return results
 
 
 def load_checks(path: Path) -> list[Check]:
@@ -533,18 +558,24 @@ def result_sort_key(result: RankResult) -> tuple[object, ...]:
 
 
 def print_markdown_table(headers: list[str], rows: list[list[str]]) -> None:
+    display_headers = [markdown_table_cell(header) for header in headers]
+    display_rows = [[markdown_table_cell(value) for value in row] for row in rows]
     widths = [
-        max(len(str(value)) for value in [header] + [row[index] for row in rows])
-        for index, header in enumerate(headers)
+        max(len(value) for value in [header] + [row[index] for row in display_rows])
+        for index, header in enumerate(display_headers)
     ]
 
-    header_row = "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)) + " |"
+    header_row = "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(display_headers)) + " |"
     separator = "| " + " | ".join("-" * width for width in widths) + " |"
     print(header_row)
     print(separator)
 
-    for row in rows:
-        print("| " + " | ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)) + " |")
+    for row in display_rows:
+        print("| " + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) + " |")
+
+
+def markdown_table_cell(value: object) -> str:
+    return str(value).replace("\n", " ").replace("|", "\\|")
 
 
 def update_keywords(path: Path) -> Path:
@@ -595,6 +626,39 @@ def add_keywords_or_create_first_set(app_id: str) -> Path:
         print("No saved check sets found. Creating the first keyword set.")
         return create_check_set_for_app(app_id)
     return add_keywords(path)
+
+
+def print_top_apps_for_keyword(client: AppStoreClient | None = None) -> None:
+    print("Step 1. Country")
+    country = ask_country()
+
+    print("\nStep 2. Keyword")
+    keyword = ask_keyword()
+
+    print_top_apps(country, keyword, client)
+
+
+def print_top_apps(country: str, keyword: str, client: AppStoreClient | None = None) -> None:
+    app_store_client = client or AppStoreClient()
+    results = app_store_client.search_apps(country, keyword, limit=10)
+    report_name = f"Top 10 apps for {country.upper()} / {keyword}"
+    if not results:
+        print(f"{report_name}: no apps found.")
+        return
+
+    print(report_name)
+    print_markdown_table(
+        ["position", "app_name", "developer", "app_id"],
+        [
+            [
+                str(result.position),
+                result.app_name,
+                result.developer,
+                result.app_id,
+            ]
+            for result in results
+        ],
+    )
 
 
 def run_checks(checks: list[Check], limit: int, delay_seconds: float) -> list[RankResult]:
@@ -694,24 +758,27 @@ def create_check_set_for_app(app_id: str) -> Path:
     return checks_path
 
 
+def pause() -> None:
+    input("\nPress Enter to continue...")
+
+
+def check_latest_positions(args: argparse.Namespace) -> None:
+    checks_path = require_latest_checks_file()
+    print(f"Checking latest saved keywords: {checks_path}")
+    check_positions(load_checks(checks_path), args.limit, args.format, args.delay_seconds)
+
+
 def run_menu(args: argparse.Namespace) -> None:
     while True:
         app_id = ensure_active_app_id()
         print("\nASO Bot Parser")
         print(f"Active app_id: {app_id}")
-        print("1. Show keywords")
-        print("2. Add keywords")
-        print("3. Update keywords")
-        print("4. Show geo list")
-        print("5. Add geo")
-        print("6. Delete geo")
-        print("7. Check new positions")
-        print("8. Show last report")
-        print("9. Show today report")
-        print("10. Show week report")
-        print("11. Show monthly report")
-        print("12. Delete app")
-        print("13. Show logs")
+        print("1. Check new positions")
+        print("2. Keywords")
+        print("3. Geo")
+        print("4. Reports")
+        print("5. App")
+        print("6. Logs")
         print("0. Exit")
 
         choice = input("Choose action: ").strip()
@@ -721,38 +788,147 @@ def run_menu(args: argparse.Namespace) -> None:
             print("Bye.")
             return
         if choice == "1":
+            check_latest_positions(args)
+        elif choice == "2":
+            run_keywords_menu(app_id)
+            continue
+        elif choice == "3":
+            run_geo_menu()
+            continue
+        elif choice == "4":
+            run_reports_menu()
+            continue
+        elif choice == "5":
+            if run_app_menu():
+                continue
+            continue
+        elif choice == "6":
+            run_logs_menu()
+            continue
+        else:
+            print("Unknown action. Choose a number from the menu.")
+
+        pause()
+
+
+def run_keywords_menu(app_id: str) -> None:
+    while True:
+        print("\nKeywords")
+        print("1. Show keywords")
+        print("2. Add keywords")
+        print("3. Update keywords")
+        print("4. Show top 10 apps by keyword")
+        print("0. Back")
+
+        choice = input("Choose action: ").strip()
+        print()
+
+        if choice == "0":
+            return
+        if choice == "1":
             print_keywords(require_latest_checks_file())
         elif choice == "2":
             add_keywords_or_create_first_set(app_id)
         elif choice == "3":
             update_keywords(require_latest_checks_file())
         elif choice == "4":
+            print_top_apps_for_keyword()
+        else:
+            print("Unknown action. Choose a number from the menu.")
+
+        pause()
+
+
+def run_geo_menu() -> None:
+    while True:
+        print("\nGeo")
+        print("1. Show geo list")
+        print("2. Add geo")
+        print("3. Delete geo")
+        print("0. Back")
+
+        choice = input("Choose action: ").strip()
+        print()
+
+        if choice == "0":
+            return
+        if choice == "1":
             print_geo_list(require_latest_checks_file())
-        elif choice == "5":
+        elif choice == "2":
             add_geo(require_latest_checks_file())
-        elif choice == "6":
+        elif choice == "3":
             delete_geo(require_latest_checks_file())
-        elif choice == "7":
-            checks_path = require_latest_checks_file()
-            print(f"Checking latest saved keywords: {checks_path}")
-            check_positions(load_checks(checks_path), args.limit, args.format, args.delay_seconds)
-        elif choice == "8":
+        else:
+            print("Unknown action. Choose a number from the menu.")
+
+        pause()
+
+
+def run_reports_menu() -> None:
+    while True:
+        print("\nReports")
+        print("1. Show last report")
+        print("2. Show today report")
+        print("3. Show week report")
+        print("4. Show monthly report")
+        print("0. Back")
+
+        choice = input("Choose action: ").strip()
+        print()
+
+        if choice == "0":
+            return
+        if choice == "1":
             print_saved_positions(require_latest_report_file())
-        elif choice == "9":
+        elif choice == "2":
             print_today_report()
-        elif choice == "10":
+        elif choice == "3":
             print_week_report()
-        elif choice == "11":
+        elif choice == "4":
             print_month_report()
-        elif choice == "12":
+        else:
+            print("Unknown action. Choose a number from the menu.")
+
+        pause()
+
+
+def run_app_menu() -> bool:
+    while True:
+        print("\nApp")
+        print("1. Delete app")
+        print("0. Back")
+
+        choice = input("Choose action: ").strip()
+        print()
+
+        if choice == "0":
+            return False
+        if choice == "1":
             if delete_active_app_id():
-                continue
-        elif choice == "13":
+                return True
+        else:
+            print("Unknown action. Choose a number from the menu.")
+
+        pause()
+
+
+def run_logs_menu() -> None:
+    while True:
+        print("\nLogs")
+        print("1. Show logs")
+        print("0. Back")
+
+        choice = input("Choose action: ").strip()
+        print()
+
+        if choice == "0":
+            return
+        if choice == "1":
             print_history()
         else:
             print("Unknown action. Choose a number from the menu.")
 
-        input("\nPress Enter to continue...")
+        pause()
 
 
 def ask_checks_for_app(app_id: str) -> list[Check]:
@@ -792,6 +968,14 @@ def ask_keywords() -> list[str]:
         print("Add at least one keyword.")
 
 
+def ask_keyword() -> str:
+    while True:
+        value = input("Enter one keyword: ").strip()
+        if value:
+            return value
+        print("Add one keyword.")
+
+
 def delay_from_env() -> float:
     raw_value = os.environ.get("ASO_REQUEST_DELAY_SECONDS")
     if raw_value is None:
@@ -829,6 +1013,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-report-today", action="store_true", help="Print today's saved position changes and exit.")
     parser.add_argument("--show-report-week", action="store_true", help="Print saved position changes for the last 7 days and exit.")
     parser.add_argument("--show-report-month", action="store_true", help="Create this month's saved position report and exit.")
+    parser.add_argument("--top-apps", action="store_true", help="Show the top 10 App Store apps for one keyword.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
@@ -843,6 +1028,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="table",
         help="Output format. Default: table.",
     )
+    parser.add_argument("--keywords-menu", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--geo-menu", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--reports-menu", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--app-menu", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--logs-menu", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -853,7 +1043,12 @@ def main() -> None:
         "/check-new-positions": "--check-new-positions",
         "/delete-app": "--delete-app",
         "/delete-geo": "--delete-geo",
+        "/app": "--app-menu",
+        "/geo": "--geo-menu",
         "/help": "--help",
+        "/keywords": "--keywords-menu",
+        "/logs": "--logs-menu",
+        "/reports": "--reports-menu",
         "/show-geo-list": "--show-geo-list",
         "/show-keywords": "--show-keywords",
         "/show-logs": "--show-logs",
@@ -861,6 +1056,8 @@ def main() -> None:
         "/show-report-month": "--show-report-month",
         "/show-report-today": "--show-report-today",
         "/show-report-week": "--show-report-week",
+        "/top-apps": "--top-apps",
+        "/top-10-apps": "--top-apps",
         "/update-keywords": "--update-keywords",
     }
     if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
@@ -873,6 +1070,27 @@ def main() -> None:
         return
 
     app_id = ensure_active_app_id()
+
+    if args.keywords_menu:
+        run_keywords_menu(app_id)
+        return
+
+    if args.geo_menu:
+        run_geo_menu()
+        return
+
+    if args.reports_menu:
+        run_reports_menu()
+        return
+
+    if args.app_menu:
+        if run_app_menu():
+            ensure_active_app_id()
+        return
+
+    if args.logs_menu:
+        run_logs_menu()
+        return
 
     if args.show_logs:
         print_history()
@@ -923,10 +1141,13 @@ def main() -> None:
         update_keywords(require_latest_checks_file())
         return
 
+    if args.top_apps:
+        print_top_apps_for_keyword()
+        return
+
     if args.check_new_positions:
-        checks_path = require_latest_checks_file()
-        checks = load_checks(checks_path)
-        print(f"Checking latest saved keywords: {checks_path}")
+        check_latest_positions(args)
+        return
     elif args.config:
         checks = load_checks(args.config)
         checks_path = args.config

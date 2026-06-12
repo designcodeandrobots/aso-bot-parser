@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app_store_rank_bot import bot
-from app_store_rank_bot.bot import RankResult
+from app_store_rank_bot.bot import AppSearchResult, RankResult
 
 
 class FixedDate(date):
@@ -90,6 +90,51 @@ class ReportFormatTests(unittest.TestCase):
                 bot.APP_ID_FILE = original_app_id_file
 
         self.assertEqual(checks, [bot.Check(app_id="123456", country="US", keyword="ai chat")])
+
+    def test_keywords_menu_can_go_back(self) -> None:
+        output = io.StringIO()
+        with patch("builtins.input", return_value="0"):
+            with contextlib.redirect_stdout(output):
+                bot.run_keywords_menu("123456")
+
+        self.assertIn("Keywords", output.getvalue())
+        self.assertIn("0. Back", output.getvalue())
+
+    def test_reports_menu_can_go_back(self) -> None:
+        output = io.StringIO()
+        with patch("builtins.input", return_value="0"):
+            with contextlib.redirect_stdout(output):
+                bot.run_reports_menu()
+
+        self.assertIn("Reports", output.getvalue())
+        self.assertIn("0. Back", output.getvalue())
+
+    def test_print_top_apps_outputs_app_table(self) -> None:
+        class FakeClient:
+            def search_apps(self, country: str, keyword: str, limit: int = 10) -> list[AppSearchResult]:
+                return [
+                    AppSearchResult(
+                        position=1,
+                        app_id="123456",
+                        app_name="Scanner One",
+                        developer="Example Dev",
+                    )
+                ]
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            bot.print_top_apps("US", "scanner", FakeClient())
+
+        self.assertIn("Top 10 apps for US / scanner", output.getvalue())
+        self.assertIn("| position | app_name", output.getvalue())
+        self.assertIn("| 1        | Scanner One", output.getvalue())
+
+    def test_markdown_table_escapes_pipe_characters(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            bot.print_markdown_table(["app_name"], [["PDF Scanner | Document Scan"]])
+
+        self.assertIn("PDF Scanner \\| Document Scan", output.getvalue())
 
     def test_write_report_uses_public_column_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
