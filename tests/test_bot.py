@@ -91,6 +91,59 @@ class ReportFormatTests(unittest.TestCase):
 
         self.assertEqual(checks, [bot.Check(app_id="123456", country="US", keyword="ai chat")])
 
+    def test_add_keywords_adds_to_selected_geos_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            bot.CHECKS_DIR = Path(temp_dir)
+            try:
+                path = bot.save_checks(
+                    [
+                        bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                        bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                    ],
+                    "2026-06-08T07:21:00+00:00",
+                )
+                with patch("builtins.input", side_effect=["GB", "gb scan app"]):
+                    updated_path = bot.add_keywords(path)
+                checks = bot.load_checks(updated_path)
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+
+        self.assertEqual(
+            checks,
+            [
+                bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                bot.Check(app_id="123456", country="GB", keyword="gb scan app"),
+            ],
+        )
+
+    def test_update_keywords_updates_selected_geos_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            bot.CHECKS_DIR = Path(temp_dir)
+            try:
+                path = bot.save_checks(
+                    [
+                        bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                        bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                    ],
+                    "2026-06-08T07:21:00+00:00",
+                )
+                with patch("builtins.input", side_effect=["GB", "gb scanner new"]):
+                    updated_path = bot.update_keywords(path)
+                checks = bot.load_checks(updated_path)
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+
+        self.assertEqual(
+            checks,
+            [
+                bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                bot.Check(app_id="123456", country="GB", keyword="gb scanner new"),
+            ],
+        )
+
     def test_keywords_menu_can_go_back(self) -> None:
         output = io.StringIO()
         with patch("builtins.input", return_value="0"):
@@ -98,6 +151,8 @@ class ReportFormatTests(unittest.TestCase):
                 bot.run_keywords_menu("123456")
 
         self.assertIn("Keywords", output.getvalue())
+        self.assertIn("Add keywords by geo", output.getvalue())
+        self.assertIn("Update keywords by geo", output.getvalue())
         self.assertIn("0. Back", output.getvalue())
 
     def test_reports_menu_can_go_back(self) -> None:
@@ -108,6 +163,52 @@ class ReportFormatTests(unittest.TestCase):
 
         self.assertIn("Reports", output.getvalue())
         self.assertIn("0. Back", output.getvalue())
+
+    def test_parse_countries_accepts_multiple_codes(self) -> None:
+        self.assertEqual(bot.parse_countries("us, gb; de, US"), ["US", "GB", "DE"])
+
+    def test_add_geo_adds_multiple_geos_with_separate_keywords(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            bot.CHECKS_DIR = Path(temp_dir)
+            try:
+                path = bot.save_checks([bot.Check(app_id="123456", country="US", keyword="scanner")], "2026-06-08T07:21:00+00:00")
+                with patch("builtins.input", side_effect=["GB, DE", "gb scanner", "de scanner; de scan"]):
+                    updated_path = bot.add_geo(path)
+                checks = bot.load_checks(updated_path)
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+
+        self.assertEqual(
+            checks,
+            [
+                bot.Check(app_id="123456", country="US", keyword="scanner"),
+                bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                bot.Check(app_id="123456", country="DE", keyword="de scanner"),
+                bot.Check(app_id="123456", country="DE", keyword="de scan"),
+            ],
+        )
+
+    def test_delete_geo_removes_multiple_geos(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_checks_dir = bot.CHECKS_DIR
+            bot.CHECKS_DIR = Path(temp_dir)
+            try:
+                path = bot.save_checks(
+                    [
+                        bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                        bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                        bot.Check(app_id="123456", country="DE", keyword="de scanner"),
+                    ],
+                    "2026-06-08T07:21:00+00:00",
+                )
+                with patch("builtins.input", side_effect=["GB, DE", "DELETE GB, DE"]):
+                    updated_path = bot.delete_geo(path)
+                checks = bot.load_checks(updated_path)
+            finally:
+                bot.CHECKS_DIR = original_checks_dir
+
+        self.assertEqual(checks, [bot.Check(app_id="123456", country="US", keyword="us scanner")])
 
     def test_print_top_apps_outputs_app_table(self) -> None:
         class FakeClient:

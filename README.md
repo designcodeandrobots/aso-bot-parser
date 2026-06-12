@@ -152,18 +152,18 @@ Slash commands are convenient when the tool is driven from chat:
 | `/app` | Open the app actions menu. |
 | `/logs` | Open the logs menu. |
 | `/top-apps` | Show the top 10 App Store apps for one country and keyword. |
-| `/add-geo` | Add one country to the active check set, then enter keywords for that country. |
-| `/add-keywords` | Append keywords to the latest saved check set. |
+| `/add-geo` | Add one or more countries to the active check set, then enter separate keywords for each country. |
+| `/add-keywords` | Append keywords to selected countries in the latest saved check set. |
 | `/check-new-positions` | Check positions for the latest saved keyword list. |
 | `/delete-app` | Delete the saved app ID after confirmation. |
-| `/delete-geo` | Remove one country from the active check set after confirmation. Previous files are not deleted. |
+| `/delete-geo` | Remove one or more countries from the active check set after confirmation. Previous files are not deleted. |
 | `/show-geo-list` | Print active countries in the latest saved check set. |
 | `/show-keywords` | Print the latest saved keyword list. |
 | `/show-report-last` | Print the latest saved positions report as a table. |
 | `/show-report-today` | Print today's rank changes from saved reports. |
 | `/show-report-week` | Print rank changes for the last 7 days from saved reports. |
 | `/show-report-month` | Create this month's rank report from saved reports. |
-| `/update-keywords` | Replace keywords for the latest saved app/country pair. |
+| `/update-keywords` | Replace keywords for selected countries in the latest saved check set. |
 | `/show-logs` | Show saved check sets. |
 
 Examples:

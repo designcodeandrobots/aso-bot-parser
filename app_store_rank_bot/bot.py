@@ -246,7 +246,7 @@ def print_keywords(path: Path) -> None:
     print(f"Apps: {', '.join(app_ids)}")
     print(f"Countries: {', '.join(countries)}")
     for index, check in enumerate(checks, start=1):
-        print(f"{index}. {check.keyword}")
+        print(f"{index}. {check.country} | {check.keyword}")
 
 
 def print_geo_list(path: Path) -> None:
@@ -270,14 +270,19 @@ def add_geo(path: Path) -> Path:
     if len(app_ids) != 1:
         raise SystemExit("Add geo supports one app_id per active check set.")
 
-    country = ask_country()
+    countries_to_add = ask_countries()
     existing_countries = {check.country for check in checks}
-    if country in existing_countries:
-        raise SystemExit(f"{country} already exists in the active geo list.")
+    duplicates = [country for country in countries_to_add if country in existing_countries]
+    if duplicates:
+        raise SystemExit(f"{', '.join(duplicates)} already exists in the active geo list.")
 
-    print(f"Adding geo {country} for app_id={app_ids[0]}")
-    keywords = ask_keywords()
-    updated_checks = checks + [Check(app_id=app_ids[0], country=country, keyword=keyword) for keyword in keywords]
+    updated_checks = list(checks)
+    for country in countries_to_add:
+        print(f"Adding geo {country} for app_id={app_ids[0]}")
+        print(f"Keywords for {country}")
+        keywords = ask_keywords()
+        updated_checks.extend(Check(app_id=app_ids[0], country=country, keyword=keyword) for keyword in keywords)
+
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     updated_path = save_checks(updated_checks, checked_at)
     print(f"\nUpdated checks saved: {updated_path}")
@@ -295,21 +300,24 @@ def delete_geo(path: Path) -> Path:
         keyword_count = sum(1 for check in checks if check.country == country)
         print(f"{index}. {country} ({keyword_count} keywords)")
 
-    country = ask_country()
-    if country not in countries:
-        raise SystemExit(f"{country} is not in the active geo list.")
-    if len(countries) == 1:
-        raise SystemExit("Cannot delete the only active geo. Add another geo first.")
+    countries_to_delete = ask_countries()
+    missing_countries = [country for country in countries_to_delete if country not in countries]
+    if missing_countries:
+        raise SystemExit(f"{', '.join(missing_countries)} is not in the active geo list.")
+    if len(countries_to_delete) >= len(countries):
+        raise SystemExit("Cannot delete all active geos. Add another geo first.")
 
-    confirmation = input(f"Type DELETE {country} to remove {country} from the active list: ").strip()
-    if confirmation != f"DELETE {country}":
+    delete_phrase = f"DELETE {', '.join(countries_to_delete)}"
+    confirmation = input(f"Type {delete_phrase} to remove selected geos from the active list: ").strip()
+    if confirmation != delete_phrase:
         print("Delete cancelled.")
         return path
 
-    updated_checks = [check for check in checks if check.country != country]
+    countries_to_delete_set = set(countries_to_delete)
+    updated_checks = [check for check in checks if check.country not in countries_to_delete_set]
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     updated_path = save_checks(updated_checks, checked_at)
-    print(f"\nGeo {country} removed from active checks.")
+    print(f"\nGeos removed from active checks: {', '.join(countries_to_delete)}")
     print(f"Updated checks saved: {updated_path}")
     print("Previous checks and reports were not deleted.")
     return updated_path
@@ -583,11 +591,23 @@ def update_keywords(path: Path) -> Path:
     if not checks:
         raise SystemExit(f"No checks found in {path}.")
 
-    app_id = checks[0].app_id
-    country = checks[0].country
-    print(f"Updating keyword list for app_id={app_id}, country={country}")
-    keywords = ask_keywords()
-    updated_checks = [Check(app_id=app_id, country=country, keyword=keyword) for keyword in keywords]
+    countries = sorted({check.country for check in checks})
+    print(f"Available countries: {', '.join(countries)}")
+    countries_to_update = ask_countries()
+    missing_countries = [country for country in countries_to_update if country not in countries]
+    if missing_countries:
+        raise SystemExit(f"{', '.join(missing_countries)} is not in the active geo list.")
+
+    countries_to_update_set = set(countries_to_update)
+    updated_checks = [check for check in checks if check.country not in countries_to_update_set]
+    for country in countries_to_update:
+        app_ids = sorted({check.app_id for check in checks if check.country == country})
+        if len(app_ids) != 1:
+            raise SystemExit(f"Update keywords supports one app_id per country. Check {country}.")
+        print(f"Updating keywords for app_id={app_ids[0]}, country={country}")
+        keywords = ask_keywords()
+        updated_checks.extend(Check(app_id=app_ids[0], country=country, keyword=keyword) for keyword in keywords)
+
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     updated_path = save_checks(updated_checks, checked_at)
     print(f"\nUpdated checks saved: {updated_path}")
@@ -600,15 +620,26 @@ def add_keywords(path: Path) -> Path:
         raise SystemExit(f"No checks found in {path}.")
 
     countries = sorted({check.country for check in checks})
-    print(f"Adding keywords for countries: {', '.join(countries)}")
-    keywords = ask_keywords()
+    print(f"Available countries: {', '.join(countries)}")
+    countries_to_add = ask_countries()
+    missing_countries = [country for country in countries_to_add if country not in countries]
+    if missing_countries:
+        raise SystemExit(f"{', '.join(missing_countries)} is not in the active geo list.")
+
     existing = {(check.country, check.keyword.casefold()) for check in checks}
-    additions = [
-        Check(app_id=checks[0].app_id, country=country, keyword=keyword)
-        for country in countries
-        for keyword in keywords
-        if (country, keyword.casefold()) not in existing
-    ]
+    additions: list[Check] = []
+    for country in countries_to_add:
+        app_ids = sorted({check.app_id for check in checks if check.country == country})
+        if len(app_ids) != 1:
+            raise SystemExit(f"Add keywords supports one app_id per country. Check {country}.")
+        print(f"Adding keywords for app_id={app_ids[0]}, country={country}")
+        keywords = ask_keywords()
+        additions.extend(
+            Check(app_id=app_ids[0], country=country, keyword=keyword)
+            for keyword in keywords
+            if (country, keyword.casefold()) not in existing
+        )
+
     if not additions:
         print("No new keywords to add.")
         return path
@@ -815,8 +846,8 @@ def run_keywords_menu(app_id: str) -> None:
     while True:
         print("\nKeywords")
         print("1. Show keywords")
-        print("2. Add keywords")
-        print("3. Update keywords")
+        print("2. Add keywords by geo")
+        print("3. Update keywords by geo")
         print("4. Show top 10 apps by keyword")
         print("0. Back")
 
@@ -843,8 +874,8 @@ def run_geo_menu() -> None:
     while True:
         print("\nGeo")
         print("1. Show geo list")
-        print("2. Add geo")
-        print("3. Delete geo")
+        print("2. Add geos")
+        print("3. Delete geos")
         print("0. Back")
 
         choice = input("Choose action: ").strip()
@@ -959,6 +990,31 @@ def ask_country() -> str:
         print("Use a 2-letter country code such as US, GB, DE, or FR.")
 
 
+def ask_countries() -> list[str]:
+    while True:
+        value = input("Enter 2-letter country codes separated by commas or semicolons, for example US, GB: ").strip()
+        try:
+            return parse_countries(value)
+        except ValueError as exc:
+            print(exc)
+
+
+def parse_countries(value: str) -> list[str]:
+    countries: list[str] = []
+    for item in value.replace(";", ",").split(","):
+        country = item.strip().upper()
+        if not country:
+            continue
+        if len(country) != 2 or not country.isalpha():
+            raise ValueError("Use 2-letter country codes such as US, GB, DE, or FR.")
+        if country not in countries:
+            countries.append(country)
+
+    if not countries:
+        raise ValueError("Add at least one country.")
+    return countries
+
+
 def ask_keywords() -> list[str]:
     while True:
         value = input("Enter all keywords separated by commas or semicolons: ").strip()
@@ -1001,11 +1057,11 @@ def file_timestamp(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
-    parser.add_argument("--add-geo", action="store_true", help="Add one country to the latest saved check set.")
-    parser.add_argument("--add-keywords", action="store_true", help="Append keywords to the latest saved check set.")
+    parser.add_argument("--add-geo", action="store_true", help="Add countries to the latest saved check set.")
+    parser.add_argument("--add-keywords", action="store_true", help="Append keywords to selected countries in the latest saved check set.")
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
     parser.add_argument("--delete-app", action="store_true", help="Delete the saved app_id after confirmation.")
-    parser.add_argument("--delete-geo", action="store_true", help="Remove one country from the active check set without deleting history.")
+    parser.add_argument("--delete-geo", action="store_true", help="Remove countries from the active check set without deleting history.")
     parser.add_argument("--show-logs", action="store_true", help="List saved check sets and exit.")
     parser.add_argument("--show-geo-list", action="store_true", help="Print active countries in the latest saved check set and exit.")
     parser.add_argument("--show-keywords", action="store_true", help="Print the latest saved keyword list and exit.")
@@ -1014,7 +1070,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-report-week", action="store_true", help="Print saved position changes for the last 7 days and exit.")
     parser.add_argument("--show-report-month", action="store_true", help="Create this month's saved position report and exit.")
     parser.add_argument("--top-apps", action="store_true", help="Show the top 10 App Store apps for one keyword.")
-    parser.add_argument("--update-keywords", action="store_true", help="Replace keywords in the latest saved check set.")
+    parser.add_argument("--update-keywords", action="store_true", help="Replace keywords for selected countries in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
     parser.add_argument(
         "--delay-seconds",
