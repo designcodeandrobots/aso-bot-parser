@@ -231,11 +231,7 @@ class ReportFormatTests(unittest.TestCase):
         self.assertIn("| position | app_name", output.getvalue())
         self.assertIn("| 1        | Scanner One", output.getvalue())
 
-    def test_parse_workers_rejects_zero(self) -> None:
-        with self.assertRaises(Exception):
-            bot.parse_workers("0")
-
-    def test_run_checks_supports_parallel_workers(self) -> None:
+    def test_run_checks_uses_fast_parallel_mode(self) -> None:
         checks = [
             bot.Check(app_id="123456", country="US", keyword="first"),
             bot.Check(app_id="123456", country="US", keyword="second"),
@@ -246,7 +242,7 @@ class ReportFormatTests(unittest.TestCase):
             return {"first": 1, "second": 2}[keyword]
 
         with patch.object(bot.AppStoreClient, "find_rank", fake_find_rank):
-            results = bot.run_checks(checks, limit=200, delay_seconds=0, workers=2)
+            results = bot.run_checks(checks, limit=200)
 
         self.assertEqual({result.keyword: result.rank for result in results}, {"first": 1, "second": 2})
 

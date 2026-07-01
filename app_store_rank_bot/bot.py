@@ -4,7 +4,6 @@ import argparse
 import concurrent.futures
 import csv
 import json
-import os
 import ssl
 import sys
 import time
@@ -21,7 +20,8 @@ APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
 CHECKS_DIR = Path("checks")
 REPORTS_DIR = Path("reports")
 APP_ID_FILE = CHECKS_DIR / "app.json"
-DEFAULT_DELAY_SECONDS = 1.0
+DEFAULT_DELAY_SECONDS = 0.0
+DEFAULT_WORKERS = 4
 DEFAULT_RETRIES = 2
 REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
 
@@ -714,19 +714,19 @@ def run_one_check(client: AppStoreClient, check: Check, limit: int, checked_at: 
     )
 
 
-def run_checks(checks: list[Check], limit: int, delay_seconds: float, workers: int = 1) -> list[RankResult]:
+def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
     client = AppStoreClient()
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     results: list[RankResult] = []
 
-    if workers > 1:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+    if DEFAULT_WORKERS > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_WORKERS) as executor:
             futures: dict[concurrent.futures.Future[RankResult], tuple[int, Check]] = {}
             for index, check in enumerate(checks, start=1):
                 print(f"[{index}/{len(checks)}] {check.country} / {check.keyword}")
                 futures[executor.submit(run_one_check, client, check, limit, checked_at)] = (index, check)
-                if delay_seconds > 0 and index < len(checks):
-                    time.sleep(delay_seconds)
+                if DEFAULT_DELAY_SECONDS > 0 and index < len(checks):
+                    time.sleep(DEFAULT_DELAY_SECONDS)
 
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
@@ -736,9 +736,9 @@ def run_checks(checks: list[Check], limit: int, delay_seconds: float, workers: i
     for index, check in enumerate(checks, start=1):
         print(f"[{index}/{len(checks)}] {check.country} / {check.keyword}")
         results.append(run_one_check(client, check, limit, checked_at))
-        if delay_seconds > 0 and index < len(checks):
-            print(f"Waiting {delay_seconds:g}s before the next request...")
-            time.sleep(delay_seconds)
+        if DEFAULT_DELAY_SECONDS > 0 and index < len(checks):
+            print(f"Waiting {DEFAULT_DELAY_SECONDS:g}s before the next request...")
+            time.sleep(DEFAULT_DELAY_SECONDS)
 
     return results
 
@@ -795,9 +795,9 @@ def print_json(results: list[RankResult]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def check_positions(checks: list[Check], limit: int, output_format: str, delay_seconds: float, workers: int = 1) -> Path:
+def check_positions(checks: list[Check], limit: int, output_format: str) -> Path:
     print("\nChecking App Store positions...")
-    results = run_checks(checks, limit, delay_seconds, workers)
+    results = run_checks(checks, limit)
     report_path = write_report(results)
 
     if output_format == "json":
@@ -824,7 +824,7 @@ def pause() -> None:
 def check_latest_positions(args: argparse.Namespace) -> None:
     checks_path = require_latest_checks_file()
     print(f"Checking latest saved keywords: {checks_path}")
-    check_positions(load_checks(checks_path), args.limit, args.format, args.delay_seconds, args.workers)
+    check_positions(load_checks(checks_path), args.limit, args.format)
 
 
 def run_menu(args: argparse.Namespace) -> None:
@@ -1060,33 +1060,6 @@ def ask_keyword() -> str:
         print("Add one keyword.")
 
 
-def delay_from_env() -> float:
-    raw_value = os.environ.get("ASO_REQUEST_DELAY_SECONDS")
-    if raw_value is None:
-        return DEFAULT_DELAY_SECONDS
-    return parse_delay(raw_value)
-
-
-def parse_delay(value: str) -> float:
-    try:
-        delay = float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("delay must be a number") from exc
-    if delay < 0:
-        raise argparse.ArgumentTypeError("delay must be 0 or greater")
-    return delay
-
-
-def parse_workers(value: str) -> int:
-    try:
-        workers = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("workers must be an integer") from exc
-    if workers < 1:
-        raise argparse.ArgumentTypeError("workers must be 1 or greater")
-    return workers
-
-
 def file_timestamp(value: str) -> str:
     normalized = value.replace("+00:00", "Z")
     return normalized.replace(":", "").replace("-", "")
@@ -1110,18 +1083,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-apps", action="store_true", help="Show the top 10 App Store apps for one keyword.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords for selected countries in the latest saved check set.")
     parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
-    parser.add_argument(
-        "--delay-seconds",
-        type=parse_delay,
-        default=delay_from_env(),
-        help="Delay between App Store requests. Default: 1.0 or ASO_REQUEST_DELAY_SECONDS.",
-    )
-    parser.add_argument(
-        "--workers",
-        type=parse_workers,
-        default=1,
-        help="Number of parallel App Store requests. Default: 1.",
-    )
     parser.add_argument(
         "--format",
         choices=("table", "json"),
@@ -1255,4 +1216,4 @@ def main() -> None:
         checks_path = create_check_set_for_app(app_id)
         checks = load_checks(checks_path)
 
-    check_positions(checks, args.limit, args.format, args.delay_seconds, args.workers)
+    check_positions(checks, args.limit, args.format)
