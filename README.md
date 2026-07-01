@@ -98,6 +98,14 @@ For large keyword lists, increase the delay:
 python3 -m app_store_rank_bot /check-new-positions --delay-seconds 2
 ```
 
+For faster checks, run a small number of requests in parallel:
+
+```bash
+python3 -m app_store_rank_bot /check-new-positions --workers 4 --delay-seconds 0
+```
+
+If the App Store starts dropping SSL connections, lower `--workers` or add a small delay such as `--delay-seconds 0.5`.
+
 You can also set the default through an environment variable:
 
 ```bash
