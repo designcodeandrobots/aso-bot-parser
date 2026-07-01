@@ -2,6 +2,13 @@
 
 ASO Bot Parser is a small CLI tool that checks an iOS app's current App Store search position for selected countries and keywords.
 
+## Updates
+
+- Position checks are now fast by default: the CLI uses 4 parallel App Store requests with no artificial delay.
+- In the latest measured run, 54 keyword checks completed in 36.8 seconds, about 6-8x faster than the previous 4-5 minute sequential run with 3-second delays.
+- Temporary App Store network and SSL errors are retried automatically before the run fails.
+- The old `--workers` and `--delay-seconds` options were removed so `/check-new-positions` always uses the same fast behavior.
+
 ## How It Works
 
 App Store search rank is measured for a specific keyword in a specific country. Each check needs:
@@ -84,7 +91,7 @@ ai chat, note taking app, language learning
 After input, the tool:
 
 1. Saves the checks to `checks/checks-<timestamp>.json`
-2. Checks each keyword sequentially
+2. Checks keywords in fast parallel mode
 3. Saves the report to `reports/positions-<timestamp>.csv`
 4. Prints the same results to the terminal
 
