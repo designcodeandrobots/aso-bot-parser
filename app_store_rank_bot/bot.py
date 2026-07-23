@@ -23,6 +23,7 @@ APP_ID_FILE = CHECKS_DIR / "app.json"
 DEFAULT_DELAY_SECONDS = 0.0
 DEFAULT_WORKERS = 4
 DEFAULT_RETRIES = 2
+DEFAULT_SEARCH_LIMIT = 10
 REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
 
 
@@ -76,7 +77,7 @@ class AppStoreClient:
 
         raise RuntimeError("unreachable")
 
-    def find_rank(self, app_id: str, country: str, keyword: str, limit: int = 200) -> int | None:
+    def find_rank(self, app_id: str, country: str, keyword: str, limit: int = DEFAULT_SEARCH_LIMIT) -> int | None:
         payload = self.search_payload(country, keyword, limit)
 
         for index, item in enumerate(payload.get("results", []), start=1):
@@ -440,19 +441,20 @@ def write_period_report(report_name: str, dates: list[date], rows_by_day: dict[d
             if current is None or parse_checked_at(row["date"]) > parse_checked_at(current["date"]):
                 latest_row_by_day_and_key[key] = row
 
-    keys = sorted(
-        {
-            (row["keyword"], row["country"], row["app_id"])
-            for rows in rows_by_day.values()
-            for row in rows
-        },
-        key=lambda item: (item[0].casefold(), item[1], item[2]),
+    keys = {
+        (row["keyword"], row["country"], row["app_id"])
+        for rows in rows_by_day.values()
+        for row in rows
+    }
+    sorted_keys = sorted(
+        keys,
+        key=lambda item: period_row_sort_key(item, dates, latest_row_by_day_and_key),
     )
 
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(["keyword", "country", "app_id"] + [report_date.isoformat() for report_date in dates])
-        for keyword, country, app_id in keys:
+        for keyword, country, app_id in sorted_keys:
             writer.writerow(
                 [keyword, country, app_id]
                 + [
@@ -462,6 +464,21 @@ def write_period_report(report_name: str, dates: list[date], rows_by_day: dict[d
             )
 
     return path
+
+
+def period_row_sort_key(
+    key: tuple[str, str, str],
+    dates: list[date],
+    latest_row_by_day_and_key: dict[tuple[date, str, str, str], dict[str, str]],
+) -> tuple[object, ...]:
+    keyword, country, app_id = key
+    latest_rank = "-"
+    for report_date in reversed(dates):
+        row = latest_row_by_day_and_key.get((report_date, keyword, country, app_id))
+        if row is not None:
+            latest_rank = period_rank_cell(row)
+            break
+    return (*rank_cell_sort_key(latest_rank), country, app_id, keyword.casefold())
 
 
 def period_rank_cell(row: dict[str, str] | None) -> str:
@@ -1082,7 +1099,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-report-month", action="store_true", help="Create this month's saved position report and exit.")
     parser.add_argument("--top-apps", action="store_true", help="Show the top 10 App Store apps for one keyword.")
     parser.add_argument("--update-keywords", action="store_true", help="Replace keywords for selected countries in the latest saved check set.")
-    parser.add_argument("--limit", type=int, default=200, help="Search depth. Default: 200.")
+    parser.add_argument("--limit", type=int, default=DEFAULT_SEARCH_LIMIT, help="Search depth. Default: 10.")
     parser.add_argument(
         "--format",
         choices=("table", "json"),

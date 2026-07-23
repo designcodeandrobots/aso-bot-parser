@@ -237,12 +237,12 @@ class ReportFormatTests(unittest.TestCase):
             bot.Check(app_id="123456", country="US", keyword="second"),
         ]
 
-        def fake_find_rank(self: object, app_id: str, country: str, keyword: str, limit: int = 200) -> int:
+        def fake_find_rank(self: object, app_id: str, country: str, keyword: str, limit: int = bot.DEFAULT_SEARCH_LIMIT) -> int:
             time.sleep(0.01)
             return {"first": 1, "second": 2}[keyword]
 
         with patch.object(bot.AppStoreClient, "find_rank", fake_find_rank):
-            results = bot.run_checks(checks, limit=200)
+            results = bot.run_checks(checks, limit=bot.DEFAULT_SEARCH_LIMIT)
 
         self.assertEqual({result.keyword: result.rank for result in results}, {"first": 1, "second": 2})
 
@@ -582,6 +582,33 @@ class ReportFormatTests(unittest.TestCase):
 
         self.assertEqual(output.getvalue(), f"Weekly report ready: {weekly_report_path}\n")
         self.assertEqual(rows[1], ["ai chat", "US", "123456", "-", "-", "-", "-", "-", "-", "-"])
+
+    def test_print_week_report_sorts_by_latest_rank(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_reports_dir = bot.REPORTS_DIR
+            bot.REPORTS_DIR = Path(temp_dir)
+            try:
+                report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
+                report_path.write_text(
+                    "keyword,rank,country,app_id,date\n"
+                    "z top,1,US,123456,2026-06-08T08:00:00+00:00\n"
+                    "a second,2,US,123456,2026-06-08T08:00:00+00:00\n",
+                    encoding="utf-8",
+                )
+
+                output = io.StringIO()
+                with patch.object(bot, "date", FixedDate):
+                    with contextlib.redirect_stdout(output):
+                        bot.print_week_report()
+            finally:
+                bot.REPORTS_DIR = original_reports_dir
+
+            weekly_report_path = Path(temp_dir) / "week-report-2026-06-02..2026-06-08.csv"
+            with weekly_report_path.open("r", encoding="utf-8", newline="") as file:
+                rows = list(csv.reader(file))
+
+        self.assertEqual(rows[1][0], "z top")
+        self.assertEqual(rows[2][0], "a second")
 
     def test_print_week_report_explains_no_reports_for_week(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
