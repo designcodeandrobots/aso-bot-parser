@@ -24,6 +24,7 @@ DEFAULT_DELAY_SECONDS = 0.0
 DEFAULT_WORKERS = 4
 DEFAULT_RETRIES = 2
 DEFAULT_SEARCH_LIMIT = 10
+FALLBACK_SEARCH_LIMIT = 200
 REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
 
 
@@ -83,6 +84,11 @@ class AppStoreClient:
         for index, item in enumerate(payload.get("results", []), start=1):
             if str(item.get("trackId")) == app_id:
                 return index
+        if limit < FALLBACK_SEARCH_LIMIT:
+            fallback_payload = self.search_payload(country, keyword, FALLBACK_SEARCH_LIMIT)
+            for index, item in enumerate(fallback_payload.get("results", []), start=1):
+                if str(item.get("trackId")) == app_id:
+                    return index
         return None
 
     def search_apps(self, country: str, keyword: str, limit: int = 10) -> list[AppSearchResult]:

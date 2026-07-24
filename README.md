@@ -5,7 +5,7 @@ ASO Bot Parser is a small CLI tool that checks an iOS app's current App Store se
 ## Updates
 
 - Position checks are now fast by default: the CLI uses 4 parallel App Store requests with no artificial delay.
-- Position reports now check only the top 10 App Store results, matching `/top-apps`.
+- Position reports now check the top 10 App Store results first, then fall back to the top 200 only when the app is not in the top 10.
 - In the latest measured run, 54 keyword checks completed in 36.8 seconds, about 6-8x faster than the previous 4-5 minute sequential run with 3-second delays.
 - Temporary App Store network and SSL errors are retried automatically before the run fails.
 - The old `--workers` and `--delay-seconds` options were removed so `/check-new-positions` always uses the same fast behavior.
@@ -24,11 +24,11 @@ The tool calls the public App Store Search API:
 https://itunes.apple.com/search?term=<keyword>&country=<country>&entity=software&limit=10
 ```
 
-It then scans the returned apps in order and compares each result's `trackId` with your `app_id`.
+It then scans the returned apps in order and compares each result's `trackId` with your `app_id`. If the app is not found in the first 10 results, the tool makes one fallback request with `limit=200` to find the deeper position.
 
 - If the app is the first result, rank is `1`.
 - If the app is the tenth result, rank is `10`.
-- If the app is not found in the first 10 results, rank is `-` in table/CSV output and `null` in JSON output.
+- If the app is not found in the first 200 results, rank is `-` in table/CSV output and `null` in JSON output.
 
 ## Installation
 

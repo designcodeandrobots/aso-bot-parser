@@ -246,6 +246,19 @@ class ReportFormatTests(unittest.TestCase):
 
         self.assertEqual({result.keyword: result.rank for result in results}, {"first": 1, "second": 2})
 
+    def test_find_rank_falls_back_to_top_200_when_not_in_top_10(self) -> None:
+        client = bot.AppStoreClient()
+
+        def fake_search_payload(country: str, keyword: str, limit: int) -> dict[str, object]:
+            if limit == bot.DEFAULT_SEARCH_LIMIT:
+                return {"results": [{"trackId": "111"} for _ in range(bot.DEFAULT_SEARCH_LIMIT)]}
+            return {"results": [{"trackId": "111"} for _ in range(22)] + [{"trackId": "123456"}]}
+
+        with patch.object(client, "search_payload", fake_search_payload):
+            rank = client.find_rank("123456", "US", "scanner")
+
+        self.assertEqual(rank, 23)
+
     def test_markdown_table_escapes_pipe_characters(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
