@@ -5,6 +5,7 @@ import concurrent.futures
 import csv
 import json
 import ssl
+import subprocess
 import sys
 import time
 import urllib.error
@@ -17,9 +18,13 @@ from typing import Any
 
 
 APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
-CHECKS_DIR = Path("checks")
-REPORTS_DIR = Path("reports")
-APP_ID_FILE = CHECKS_DIR / "app.json"
+PROJECTS_DIR = Path("projects")
+PROJECTS_FILE = Path("projects.json")
+LEGACY_CHECKS_DIR = Path("checks")
+LEGACY_REPORTS_DIR = Path("reports")
+DEFAULT_PROJECT_APP_ID = "6443812062"
+DEFAULT_PROJECT_APP_NAME = "Doc Scanner PDF, Convert & OCR"
+MIGRATE_HINT = "Legacy checks/ or reports/ found. Run: python3 -m app_store_rank_bot --migrate-projects"
 DEFAULT_DELAY_SECONDS = 0.0
 DEFAULT_WORKERS = 4
 DEFAULT_RETRIES = 2
@@ -108,6 +113,243 @@ class AppStoreClient:
         return results
 
 
+def project_dir(app_id: str) -> Path:
+    return PROJECTS_DIR / app_id
+
+
+def checks_dir(app_id: str) -> Path:
+    return project_dir(app_id) / "checks"
+
+
+def reports_dir(app_id: str) -> Path:
+    return project_dir(app_id) / "reports"
+
+
+def app_id_file(app_id: str) -> Path:
+    return project_dir(app_id) / "app.json"
+
+
+def _visible_entries(directory: Path) -> list[Path]:
+    if not directory.exists():
+        return []
+    return [path for path in directory.iterdir() if not path.name.startswith(".")]
+
+
+def legacy_data_present() -> bool:
+    return bool(_visible_entries(LEGACY_CHECKS_DIR) or _visible_entries(LEGACY_REPORTS_DIR))
+
+
+def require_migrated() -> None:
+    if legacy_data_present():
+        raise SystemExit(MIGRATE_HINT)
+
+
+def load_active_project_id() -> str | None:
+    if not PROJECTS_FILE.exists():
+        return None
+    data = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    app_id = str(data.get("active", "")).strip()
+    if not app_id.isdigit():
+        return None
+    return app_id
+
+
+def save_active_project_id(app_id: str) -> Path:
+    payload = {"active": app_id}
+    PROJECTS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return PROJECTS_FILE
+
+
+def project_exists(app_id: str) -> bool:
+    return app_id_file(app_id).exists()
+
+
+def list_project_ids() -> list[str]:
+    if not PROJECTS_DIR.exists():
+        return []
+    app_ids: list[str] = []
+    for child in sorted(PROJECTS_DIR.iterdir()):
+        if child.is_dir() and (child / "app.json").exists():
+            app_ids.append(child.name)
+    return app_ids
+
+
+def load_project_name(app_id: str) -> str:
+    path = app_id_file(app_id)
+    if not path.exists():
+        return ""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return str(data.get("name", "")).strip()
+
+
+def save_project_app(app_id: str, name: str = "", saved_at: str | None = None) -> Path:
+    project_dir(app_id).mkdir(parents=True, exist_ok=True)
+    checks_dir(app_id).mkdir(parents=True, exist_ok=True)
+    reports_dir(app_id).mkdir(parents=True, exist_ok=True)
+    path = app_id_file(app_id)
+    payload = {
+        "app_id": app_id,
+        "name": name,
+        "saved_at": saved_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def resolve_app_id(requested_app_id: str | None = None) -> str | None:
+    if requested_app_id:
+        app_id = requested_app_id.strip()
+        if not app_id.isdigit():
+            raise SystemExit("app_id must be numeric, for example 284882215.")
+        if not project_exists(app_id):
+            raise SystemExit(f"No project for app_id={app_id}. Create it first or run --migrate-projects.")
+        return app_id
+    app_id = load_active_project_id()
+    if app_id is not None and project_exists(app_id):
+        return app_id
+    return None
+
+
+def list_apps() -> None:
+    require_migrated()
+    app_ids = list_project_ids()
+    if not app_ids:
+        print("No projects found.")
+        return
+
+    active = load_active_project_id()
+    print("Projects:")
+    for app_id in app_ids:
+        name = load_project_name(app_id)
+        suffix = " (active)" if app_id == active else ""
+        if name:
+            print(f"{app_id}  {name}{suffix}")
+        else:
+            print(f"{app_id}{suffix}")
+
+
+def use_app(app_id: str) -> None:
+    require_migrated()
+    resolved = resolve_app_id(app_id)
+    if resolved is None:
+        raise SystemExit(f"No project for app_id={app_id}.")
+    save_active_project_id(resolved)
+    print(f"Active project: {resolved}")
+
+
+def _is_git_tracked(path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", str(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _move_path(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        return
+    if _is_git_tracked(src):
+        subprocess.run(["git", "mv", "--", str(src), str(dest)], check=True)
+        return
+    src.rename(dest)
+
+
+def _write_app_json(path: Path, app_id: str, name: str, saved_at: str) -> None:
+    payload = {
+        "app_id": app_id,
+        "name": name,
+        "saved_at": saved_at,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _ensure_project_app_json(path: Path, app_id: str, name: str) -> None:
+    saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    existing_name = name
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        existing_id = str(data.get("app_id", "")).strip() or app_id
+        existing_name = str(data.get("name", "")).strip() or name
+        saved_at = str(data.get("saved_at", "")).strip() or saved_at
+        app_id = existing_id
+    _write_app_json(path, app_id, existing_name, saved_at)
+
+
+def _remove_legacy_dir(directory: Path) -> None:
+    if not directory.exists():
+        return
+    for leftover in list(directory.iterdir()):
+        if leftover.is_file() and leftover.name.startswith("."):
+            leftover.unlink()
+    try:
+        directory.rmdir()
+    except OSError:
+        pass
+
+
+def migrate_projects() -> None:
+    app_id = DEFAULT_PROJECT_APP_ID
+    dest_root = project_dir(app_id)
+    dest_checks = checks_dir(app_id)
+    dest_reports = reports_dir(app_id)
+    dest_app = app_id_file(app_id)
+
+    dest_checks.mkdir(parents=True, exist_ok=True)
+    dest_reports.mkdir(parents=True, exist_ok=True)
+
+    legacy_app = LEGACY_CHECKS_DIR / "app.json"
+    saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    name = DEFAULT_PROJECT_APP_NAME
+    if dest_app.exists():
+        data = json.loads(dest_app.read_text(encoding="utf-8"))
+        saved_at = str(data.get("saved_at", "")).strip() or saved_at
+        name = str(data.get("name", "")).strip() or name
+    elif legacy_app.exists():
+        data = json.loads(legacy_app.read_text(encoding="utf-8"))
+        saved_at = str(data.get("saved_at", "")).strip() or saved_at
+        name = str(data.get("name", "")).strip() or name
+
+    if legacy_app.exists() and not dest_app.exists():
+        _move_path(legacy_app, dest_app)
+    elif legacy_app.exists() and dest_app.exists():
+        legacy_app.unlink()
+    _ensure_project_app_json(dest_app, app_id, name)
+
+    if LEGACY_CHECKS_DIR.exists():
+        for src in _visible_entries(LEGACY_CHECKS_DIR):
+            if src.is_file():
+                dest = dest_checks / src.name
+                if dest.exists():
+                    src.unlink()
+                    continue
+                _move_path(src, dest)
+
+    if LEGACY_REPORTS_DIR.exists():
+        for src in _visible_entries(LEGACY_REPORTS_DIR):
+            if src.is_file():
+                dest = dest_reports / src.name
+                if dest.exists():
+                    src.unlink()
+                    continue
+                _move_path(src, dest)
+
+    if load_active_project_id() is None:
+        save_active_project_id(app_id)
+
+    _remove_legacy_dir(LEGACY_CHECKS_DIR)
+    _remove_legacy_dir(LEGACY_REPORTS_DIR)
+
+    moved_checks = len(list(dest_checks.glob("checks-*.json")))
+    moved_reports = len(_visible_entries(dest_reports))
+    print(f"Migrated project {app_id} -> {dest_root}")
+    print(f"checks: {moved_checks} files")
+    print(f"reports: {moved_reports} files")
+    print(f"Active project: {load_active_project_id()}")
+
+
 def load_checks(path: Path) -> list[Check]:
     data = json.loads(path.read_text(encoding="utf-8"))
     checks: list[Check] = []
@@ -129,9 +371,9 @@ def load_checks(path: Path) -> list[Check]:
     return checks
 
 
-def save_checks(checks: list[Check], checked_at: str) -> Path:
-    CHECKS_DIR.mkdir(parents=True, exist_ok=True)
-    path = CHECKS_DIR / f"checks-{file_timestamp(checked_at)}.json"
+def save_checks(checks: list[Check], checked_at: str, directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"checks-{file_timestamp(checked_at)}.json"
     payload = {
         "created_at": checked_at,
         "checks": [
@@ -148,28 +390,18 @@ def save_checks(checks: list[Check], checked_at: str) -> Path:
 
 
 def load_active_app_id() -> str | None:
-    if not APP_ID_FILE.exists():
-        return None
-
-    data = json.loads(APP_ID_FILE.read_text(encoding="utf-8"))
-    app_id = str(data.get("app_id", "")).strip()
-    if not app_id.isdigit():
-        return None
-    return app_id
+    return resolve_app_id()
 
 
-def save_active_app_id(app_id: str) -> Path:
-    CHECKS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "app_id": app_id,
-        "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    APP_ID_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return APP_ID_FILE
+def save_active_app_id(app_id: str, name: str = "") -> Path:
+    path = save_project_app(app_id, name=name)
+    save_active_project_id(app_id)
+    return path
 
 
-def ensure_active_app_id() -> str:
-    app_id = load_active_app_id()
+def ensure_active_app_id(requested_app_id: str | None = None) -> str:
+    require_migrated()
+    app_id = resolve_app_id(requested_app_id)
     if app_id is not None:
         return app_id
 
@@ -180,60 +412,68 @@ def ensure_active_app_id() -> str:
     return app_id
 
 
-def delete_active_app_id() -> bool:
-    app_id = load_active_app_id()
-    if app_id is None:
+def delete_active_app_id(app_id: str | None = None) -> bool:
+    target = app_id or load_active_app_id()
+    if target is None:
         print("No saved app_id found.")
         return False
 
-    confirmation = input(f"Are you sure you want to delete app_id={app_id}? Type YES to confirm: ").strip()
+    confirmation = input(f"Are you sure you want to delete app_id={target}? Type YES to confirm: ").strip()
     if confirmation != "YES":
         print("Delete cancelled.")
         return False
 
-    APP_ID_FILE.unlink()
+    path = app_id_file(target)
+    if path.exists():
+        path.unlink()
+    if load_active_project_id() == target:
+        remaining = list_project_ids()
+        if remaining:
+            save_active_project_id(remaining[0])
+        elif PROJECTS_FILE.exists():
+            PROJECTS_FILE.unlink()
     print("App deleted. Restarting...")
     return True
 
 
-def saved_check_files() -> list[Path]:
-    if not CHECKS_DIR.exists():
+def saved_check_files(directory: Path) -> list[Path]:
+    if not directory.exists():
         return []
-    return sorted(CHECKS_DIR.glob("checks-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return sorted(directory.glob("checks-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
 
 
-def latest_checks_file() -> Path | None:
-    files = saved_check_files()
+def latest_checks_file(directory: Path) -> Path | None:
+    files = saved_check_files(directory)
     return files[0] if files else None
 
 
-def saved_report_files() -> list[Path]:
-    if not REPORTS_DIR.exists():
+def saved_report_files(directory: Path) -> list[Path]:
+    if not directory.exists():
         return []
-    return sorted(REPORTS_DIR.glob("positions-*.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return sorted(directory.glob("positions-*.csv"), key=lambda path: path.stat().st_mtime, reverse=True)
 
 
-def latest_report_file() -> Path | None:
-    files = saved_report_files()
+def latest_report_file(directory: Path) -> Path | None:
+    files = saved_report_files(directory)
     return files[0] if files else None
 
 
-def require_latest_checks_file() -> Path:
-    path = latest_checks_file()
+def require_latest_checks_file(directory: Path) -> Path:
+    path = latest_checks_file(directory)
     if path is None:
         raise SystemExit("No saved check sets found. Run the interactive flow first.")
     return path
 
 
-def require_latest_report_file() -> Path:
-    path = latest_report_file()
+def require_latest_report_file(directory: Path) -> Path:
+    path = latest_report_file(directory)
     if path is None:
         raise SystemExit("No saved position reports found. Run /check-new-positions first.")
     return path
 
 
-def print_history() -> None:
-    files = saved_check_files()
+def print_history(directory: Path) -> None:
+    files = saved_check_files(directory)
     if not files:
         print("No saved check sets found.")
         return
@@ -305,7 +545,7 @@ def add_geo(path: Path) -> Path:
         updated_checks.extend(Check(app_id=app_ids[0], country=country, keyword=keyword) for keyword in keywords)
 
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    updated_path = save_checks(updated_checks, checked_at)
+    updated_path = save_checks(updated_checks, checked_at, path.parent)
     print(f"\nUpdated checks saved: {updated_path}")
     return updated_path
 
@@ -337,7 +577,7 @@ def delete_geo(path: Path) -> Path:
     countries_to_delete_set = set(countries_to_delete)
     updated_checks = [check for check in checks if check.country not in countries_to_delete_set]
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    updated_path = save_checks(updated_checks, checked_at)
+    updated_path = save_checks(updated_checks, checked_at, path.parent)
     print(f"\nGeos removed from active checks: {', '.join(countries_to_delete)}")
     print(f"Updated checks saved: {updated_path}")
     print("Previous checks and reports were not deleted.")
@@ -369,9 +609,9 @@ def print_saved_positions(path: Path) -> None:
     )
 
 
-def print_today_report() -> None:
+def print_today_report(directory: Path) -> None:
     today = date.today()
-    rows = [row for row in load_report_rows(saved_report_files()) if local_date(row["date"]) == today]
+    rows = [row for row in load_report_rows(saved_report_files(directory)) if local_date(row["date"]) == today]
     if not rows:
         print("No saved position reports found for today.")
         return
@@ -380,30 +620,30 @@ def print_today_report() -> None:
     print_position_change_table(rows, "first_rank", "last_rank")
 
 
-def print_week_report() -> None:
+def print_week_report(directory: Path) -> None:
     end_date = date.today()
     dates = [end_date - timedelta(days=offset) for offset in range(6, -1, -1)]
     report_name = f"week-report-{dates[0].isoformat()}..{dates[-1].isoformat()}"
-    rows_by_day = latest_report_rows_by_day(dates)
+    rows_by_day = latest_report_rows_by_day(dates, directory)
     if not rows_by_day:
         print(f"Weekly report not ready: {report_name}")
         print("Reason: no saved position reports found for the last 7 days.")
         return
 
-    report_path = write_period_report(report_name, dates, rows_by_day)
+    report_path = write_period_report(report_name, dates, rows_by_day, directory)
     print(f"Weekly report ready: {report_path}")
 
 
-def print_month_report() -> None:
+def print_month_report(directory: Path) -> None:
     dates = current_month_dates()
     report_name = f"month-report-{dates[0].isoformat()}..{dates[-1].isoformat()}"
-    rows_by_day = latest_report_rows_by_day(dates)
+    rows_by_day = latest_report_rows_by_day(dates, directory)
     if not rows_by_day:
         print(f"Monthly report not ready: {report_name}")
         print("Reason: no saved position reports found for the current month.")
         return
 
-    report_path = write_period_report(report_name, dates, rows_by_day)
+    report_path = write_period_report(report_name, dates, rows_by_day, directory)
     print(f"Monthly report ready: {report_path}")
 
 
@@ -413,11 +653,11 @@ def current_month_dates() -> list[date]:
     return [first_day + timedelta(days=offset) for offset in range(today.day)]
 
 
-def latest_report_rows_by_day(dates: list[date]) -> dict[date, list[dict[str, str]]]:
+def latest_report_rows_by_day(dates: list[date], directory: Path) -> dict[date, list[dict[str, str]]]:
     date_set = set(dates)
     latest_by_day: dict[date, tuple[float, list[dict[str, str]]]] = {}
 
-    for path in saved_report_files():
+    for path in saved_report_files(directory):
         rows = load_report_rows([path])
         if not rows:
             continue
@@ -437,9 +677,14 @@ def latest_report_rows_by_day(dates: list[date]) -> dict[date, list[dict[str, st
     return {report_date: rows for report_date, (_, rows) in latest_by_day.items()}
 
 
-def write_period_report(report_name: str, dates: list[date], rows_by_day: dict[date, list[dict[str, str]]]) -> Path:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = REPORTS_DIR / f"{report_name}.csv"
+def write_period_report(
+    report_name: str,
+    dates: list[date],
+    rows_by_day: dict[date, list[dict[str, str]]],
+    directory: Path,
+) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{report_name}.csv"
     latest_row_by_day_and_key: dict[tuple[date, str, str, str], dict[str, str]] = {}
 
     for report_date, rows in rows_by_day.items():
@@ -646,7 +891,7 @@ def update_keywords(path: Path) -> Path:
         updated_checks.extend(Check(app_id=app_ids[0], country=country, keyword=keyword) for keyword in keywords)
 
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    updated_path = save_checks(updated_checks, checked_at)
+    updated_path = save_checks(updated_checks, checked_at, path.parent)
     print(f"\nUpdated checks saved: {updated_path}")
     return updated_path
 
@@ -682,14 +927,14 @@ def add_keywords(path: Path) -> Path:
         return path
 
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    updated_path = save_checks(checks + additions, checked_at)
+    updated_path = save_checks(checks + additions, checked_at, path.parent)
     print(f"\nAdded {len(additions)} keyword checks.")
     print(f"Updated checks saved: {updated_path}")
     return updated_path
 
 
 def add_keywords_or_create_first_set(app_id: str) -> Path:
-    path = latest_checks_file()
+    path = latest_checks_file(checks_dir(app_id))
     if path is None:
         print("No saved check sets found. Creating the first keyword set.")
         return create_check_set_for_app(app_id)
@@ -792,10 +1037,10 @@ def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
     return results
 
 
-def write_report(results: list[RankResult]) -> Path:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+def write_report(results: list[RankResult], directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
     checked_at = results[0].checked_at if results else datetime.now(timezone.utc).isoformat(timespec="seconds")
-    path = REPORTS_DIR / f"positions-{file_timestamp(checked_at)}.csv"
+    path = directory / f"positions-{file_timestamp(checked_at)}.csv"
 
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
@@ -845,7 +1090,7 @@ def print_json(results: list[RankResult]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def check_positions(checks: list[Check], limit: int, output_format: str) -> Path | None:
+def check_positions(checks: list[Check], limit: int, output_format: str, directory: Path) -> Path | None:
     print("\nChecking App Store positions...")
     results = run_checks(checks, limit)
 
@@ -860,7 +1105,7 @@ def check_positions(checks: list[Check], limit: int, output_format: str) -> Path
         print("A report with these gaps would corrupt the history. Re-run the check.")
         return None
 
-    report_path = write_report(results)
+    report_path = write_report(results, directory)
     print(f"\nReport saved: {report_path}")
     return report_path
 
@@ -868,7 +1113,7 @@ def check_positions(checks: list[Check], limit: int, output_format: str) -> Path
 def create_check_set_for_app(app_id: str) -> Path:
     checks = ask_checks_for_app(app_id)
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    checks_path = save_checks(checks, checked_at)
+    checks_path = save_checks(checks, checked_at, checks_dir(app_id))
     print(f"\nChecks saved: {checks_path}")
     return checks_path
 
@@ -877,15 +1122,15 @@ def pause() -> None:
     input("\nPress Enter to continue...")
 
 
-def check_latest_positions(args: argparse.Namespace) -> None:
-    checks_path = require_latest_checks_file()
+def check_latest_positions(args: argparse.Namespace, app_id: str) -> None:
+    checks_path = require_latest_checks_file(checks_dir(app_id))
     print(f"Checking latest saved keywords: {checks_path}")
-    check_positions(load_checks(checks_path), args.limit, args.format)
+    check_positions(load_checks(checks_path), args.limit, args.format, reports_dir(app_id))
 
 
 def run_menu(args: argparse.Namespace) -> None:
     while True:
-        app_id = ensure_active_app_id()
+        app_id = ensure_active_app_id(args.app)
         print("\nASO Bot Parser")
         print(f"Active app_id: {app_id}")
         print("1. Check new positions")
@@ -903,22 +1148,22 @@ def run_menu(args: argparse.Namespace) -> None:
             print("Bye.")
             return
         if choice == "1":
-            check_latest_positions(args)
+            check_latest_positions(args, app_id)
         elif choice == "2":
             run_keywords_menu(app_id)
             continue
         elif choice == "3":
-            run_geo_menu()
+            run_geo_menu(app_id)
             continue
         elif choice == "4":
-            run_reports_menu()
+            run_reports_menu(app_id)
             continue
         elif choice == "5":
-            if run_app_menu():
+            if run_app_menu(app_id):
                 continue
             continue
         elif choice == "6":
-            run_logs_menu()
+            run_logs_menu(app_id)
             continue
         else:
             print("Unknown action. Choose a number from the menu.")
@@ -941,11 +1186,11 @@ def run_keywords_menu(app_id: str) -> None:
         if choice == "0":
             return
         if choice == "1":
-            print_keywords(require_latest_checks_file())
+            print_keywords(require_latest_checks_file(checks_dir(app_id)))
         elif choice == "2":
             add_keywords_or_create_first_set(app_id)
         elif choice == "3":
-            update_keywords(require_latest_checks_file())
+            update_keywords(require_latest_checks_file(checks_dir(app_id)))
         elif choice == "4":
             print_top_apps_for_keyword()
         else:
@@ -954,7 +1199,7 @@ def run_keywords_menu(app_id: str) -> None:
         pause()
 
 
-def run_geo_menu() -> None:
+def run_geo_menu(app_id: str) -> None:
     while True:
         print("\nGeo")
         print("1. Show geo list")
@@ -968,18 +1213,18 @@ def run_geo_menu() -> None:
         if choice == "0":
             return
         if choice == "1":
-            print_geo_list(require_latest_checks_file())
+            print_geo_list(require_latest_checks_file(checks_dir(app_id)))
         elif choice == "2":
-            add_geo(require_latest_checks_file())
+            add_geo(require_latest_checks_file(checks_dir(app_id)))
         elif choice == "3":
-            delete_geo(require_latest_checks_file())
+            delete_geo(require_latest_checks_file(checks_dir(app_id)))
         else:
             print("Unknown action. Choose a number from the menu.")
 
         pause()
 
 
-def run_reports_menu() -> None:
+def run_reports_menu(app_id: str) -> None:
     while True:
         print("\nReports")
         print("1. Show last report")
@@ -994,20 +1239,20 @@ def run_reports_menu() -> None:
         if choice == "0":
             return
         if choice == "1":
-            print_saved_positions(require_latest_report_file())
+            print_saved_positions(require_latest_report_file(reports_dir(app_id)))
         elif choice == "2":
-            print_today_report()
+            print_today_report(reports_dir(app_id))
         elif choice == "3":
-            print_week_report()
+            print_week_report(reports_dir(app_id))
         elif choice == "4":
-            print_month_report()
+            print_month_report(reports_dir(app_id))
         else:
             print("Unknown action. Choose a number from the menu.")
 
         pause()
 
 
-def run_app_menu() -> bool:
+def run_app_menu(app_id: str) -> bool:
     while True:
         print("\nApp")
         print("1. Delete app")
@@ -1019,7 +1264,7 @@ def run_app_menu() -> bool:
         if choice == "0":
             return False
         if choice == "1":
-            if delete_active_app_id():
+            if delete_active_app_id(app_id):
                 return True
         else:
             print("Unknown action. Choose a number from the menu.")
@@ -1027,7 +1272,7 @@ def run_app_menu() -> bool:
         pause()
 
 
-def run_logs_menu() -> None:
+def run_logs_menu(app_id: str) -> None:
     while True:
         print("\nLogs")
         print("1. Show logs")
@@ -1039,7 +1284,7 @@ def run_logs_menu() -> None:
         if choice == "0":
             return
         if choice == "1":
-            print_history()
+            print_history(checks_dir(app_id))
         else:
             print("Unknown action. Choose a number from the menu.")
 
@@ -1124,6 +1369,10 @@ def file_timestamp(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check App Store search positions.")
     parser.add_argument("config", nargs="?", type=Path, help="Path to checks JSON file.")
+    parser.add_argument("--app", dest="app", help="Use this app_id for one command.")
+    parser.add_argument("--use-app", dest="use_app", help="Set the active project.")
+    parser.add_argument("--list-apps", action="store_true", help="List projects and mark the active one.")
+    parser.add_argument("--migrate-projects", action="store_true", help="Move legacy checks/ and reports/ into projects/.")
     parser.add_argument("--add-geo", action="store_true", help="Add countries to the latest saved check set.")
     parser.add_argument("--add-keywords", action="store_true", help="Append keywords to selected countries in the latest saved check set.")
     parser.add_argument("--check-new-positions", action="store_true", help="Check positions for the latest saved keyword list.")
@@ -1176,53 +1425,67 @@ def main() -> None:
         "/top-apps": "--top-apps",
         "/top-10-apps": "--top-apps",
         "/update-keywords": "--update-keywords",
+        "/list-apps": "--list-apps",
+        "/migrate-projects": "--migrate-projects",
     }
     if len(sys.argv) > 1 and sys.argv[1] in slash_aliases:
         sys.argv[1] = slash_aliases[sys.argv[1]]
 
     args = build_parser().parse_args()
 
+    if args.migrate_projects:
+        migrate_projects()
+        return
+
+    if args.list_apps:
+        list_apps()
+        return
+
+    if args.use_app:
+        use_app(args.use_app)
+        return
+
     if len(sys.argv) == 1:
         run_menu(args)
         return
 
-    app_id = ensure_active_app_id()
+    app_id = ensure_active_app_id(args.app)
 
     if args.keywords_menu:
         run_keywords_menu(app_id)
         return
 
     if args.geo_menu:
-        run_geo_menu()
+        run_geo_menu(app_id)
         return
 
     if args.reports_menu:
-        run_reports_menu()
+        run_reports_menu(app_id)
         return
 
     if args.app_menu:
-        if run_app_menu():
-            ensure_active_app_id()
+        if run_app_menu(app_id):
+            ensure_active_app_id(args.app)
         return
 
     if args.logs_menu:
-        run_logs_menu()
+        run_logs_menu(app_id)
         return
 
     if args.show_logs:
-        print_history()
+        print_history(checks_dir(app_id))
         return
 
     if args.show_geo_list:
-        print_geo_list(require_latest_checks_file())
+        print_geo_list(require_latest_checks_file(checks_dir(app_id)))
         return
 
     if args.show_keywords:
-        print_keywords(require_latest_checks_file())
+        print_keywords(require_latest_checks_file(checks_dir(app_id)))
         return
 
     if args.add_geo:
-        add_geo(require_latest_checks_file())
+        add_geo(require_latest_checks_file(checks_dir(app_id)))
         return
 
     if args.add_keywords:
@@ -1230,32 +1493,32 @@ def main() -> None:
         return
 
     if args.delete_app:
-        if delete_active_app_id():
-            ensure_active_app_id()
+        if delete_active_app_id(app_id):
+            ensure_active_app_id(args.app)
         return
 
     if args.delete_geo:
-        delete_geo(require_latest_checks_file())
+        delete_geo(require_latest_checks_file(checks_dir(app_id)))
         return
 
     if args.show_report_last:
-        print_saved_positions(require_latest_report_file())
+        print_saved_positions(require_latest_report_file(reports_dir(app_id)))
         return
 
     if args.show_report_today:
-        print_today_report()
+        print_today_report(reports_dir(app_id))
         return
 
     if args.show_report_week:
-        print_week_report()
+        print_week_report(reports_dir(app_id))
         return
 
     if args.show_report_month:
-        print_month_report()
+        print_month_report(reports_dir(app_id))
         return
 
     if args.update_keywords:
-        update_keywords(require_latest_checks_file())
+        update_keywords(require_latest_checks_file(checks_dir(app_id)))
         return
 
     if args.top_apps:
@@ -1263,7 +1526,7 @@ def main() -> None:
         return
 
     if args.check_new_positions:
-        check_latest_positions(args)
+        check_latest_positions(args, app_id)
         return
     elif args.config:
         checks = load_checks(args.config)
@@ -1272,4 +1535,4 @@ def main() -> None:
         checks_path = create_check_set_for_app(app_id)
         checks = load_checks(checks_path)
 
-    check_positions(checks, args.limit, args.format)
+    check_positions(checks, args.limit, args.format, reports_dir(app_id))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import csv
 import io
+import json
 import os
 import tempfile
 import time
@@ -21,38 +22,34 @@ class FixedDate(date):
         return cls(2026, 6, 8)
 
 
+@contextlib.contextmanager
+def isolated_projects(temp_dir: str):
+    root = Path(temp_dir)
+    with patch.object(bot, "PROJECTS_DIR", root / "projects"):
+        with patch.object(bot, "PROJECTS_FILE", root / "projects.json"):
+            with patch.object(bot, "LEGACY_CHECKS_DIR", root / "checks"):
+                with patch.object(bot, "LEGACY_REPORTS_DIR", root / "reports"):
+                    yield root
+
+
 class ReportFormatTests(unittest.TestCase):
     def test_save_and_load_active_app_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            original_app_id_file = bot.APP_ID_FILE
-            bot.CHECKS_DIR = Path(temp_dir)
-            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
-            try:
+            with isolated_projects(temp_dir):
                 path = bot.save_active_app_id("123456")
                 app_id = bot.load_active_app_id()
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
-                bot.APP_ID_FILE = original_app_id_file
 
         self.assertEqual(path.name, "app.json")
         self.assertEqual(app_id, "123456")
 
     def test_ensure_active_app_id_prompts_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            original_app_id_file = bot.APP_ID_FILE
-            bot.CHECKS_DIR = Path(temp_dir)
-            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
-            try:
+            with isolated_projects(temp_dir):
                 output = io.StringIO()
                 with patch("builtins.input", return_value="123456"):
                     with contextlib.redirect_stdout(output):
                         app_id = bot.ensure_active_app_id()
                 saved_app_id = bot.load_active_app_id()
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
-                bot.APP_ID_FILE = original_app_id_file
 
         self.assertEqual(app_id, "123456")
         self.assertEqual(saved_app_id, "123456")
@@ -60,55 +57,37 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_delete_active_app_id_requires_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            original_app_id_file = bot.APP_ID_FILE
-            bot.CHECKS_DIR = Path(temp_dir)
-            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
-            try:
+            with isolated_projects(temp_dir):
                 bot.save_active_app_id("123456")
                 with patch("builtins.input", return_value="YES"):
                     deleted = bot.delete_active_app_id()
                 app_id = bot.load_active_app_id()
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
-                bot.APP_ID_FILE = original_app_id_file
 
         self.assertTrue(deleted)
         self.assertIsNone(app_id)
 
     def test_add_keywords_creates_first_check_set_when_none_exist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            original_app_id_file = bot.APP_ID_FILE
-            bot.CHECKS_DIR = Path(temp_dir)
-            bot.APP_ID_FILE = Path(temp_dir) / "app.json"
-            try:
+            with isolated_projects(temp_dir):
                 with patch("builtins.input", side_effect=["US", "ai chat"]):
                     path = bot.add_keywords_or_create_first_set("123456")
                 checks = bot.load_checks(path)
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
-                bot.APP_ID_FILE = original_app_id_file
 
         self.assertEqual(checks, [bot.Check(app_id="123456", country="US", keyword="ai chat")])
 
     def test_add_keywords_adds_to_selected_geos_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            bot.CHECKS_DIR = Path(temp_dir)
-            try:
-                path = bot.save_checks(
-                    [
-                        bot.Check(app_id="123456", country="US", keyword="us scanner"),
-                        bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
-                    ],
-                    "2026-06-08T07:21:00+00:00",
-                )
-                with patch("builtins.input", side_effect=["GB", "gb scan app"]):
-                    updated_path = bot.add_keywords(path)
-                checks = bot.load_checks(updated_path)
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
+            path = bot.save_checks(
+                [
+                    bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                    bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                ],
+                "2026-06-08T07:21:00+00:00",
+                Path(temp_dir),
+            )
+            with patch("builtins.input", side_effect=["GB", "gb scan app"]):
+                updated_path = bot.add_keywords(path)
+            checks = bot.load_checks(updated_path)
 
         self.assertEqual(
             checks,
@@ -121,21 +100,17 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_update_keywords_updates_selected_geos_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            bot.CHECKS_DIR = Path(temp_dir)
-            try:
-                path = bot.save_checks(
-                    [
-                        bot.Check(app_id="123456", country="US", keyword="us scanner"),
-                        bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
-                    ],
-                    "2026-06-08T07:21:00+00:00",
-                )
-                with patch("builtins.input", side_effect=["GB", "gb scanner new"]):
-                    updated_path = bot.update_keywords(path)
-                checks = bot.load_checks(updated_path)
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
+            path = bot.save_checks(
+                [
+                    bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                    bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                ],
+                "2026-06-08T07:21:00+00:00",
+                Path(temp_dir),
+            )
+            with patch("builtins.input", side_effect=["GB", "gb scanner new"]):
+                updated_path = bot.update_keywords(path)
+            checks = bot.load_checks(updated_path)
 
         self.assertEqual(
             checks,
@@ -160,7 +135,7 @@ class ReportFormatTests(unittest.TestCase):
         output = io.StringIO()
         with patch("builtins.input", return_value="0"):
             with contextlib.redirect_stdout(output):
-                bot.run_reports_menu()
+                bot.run_reports_menu("123456")
 
         self.assertIn("Reports", output.getvalue())
         self.assertIn("0. Back", output.getvalue())
@@ -170,15 +145,14 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_add_geo_adds_multiple_geos_with_separate_keywords(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            bot.CHECKS_DIR = Path(temp_dir)
-            try:
-                path = bot.save_checks([bot.Check(app_id="123456", country="US", keyword="scanner")], "2026-06-08T07:21:00+00:00")
-                with patch("builtins.input", side_effect=["GB, DE", "gb scanner", "de scanner; de scan"]):
-                    updated_path = bot.add_geo(path)
-                checks = bot.load_checks(updated_path)
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
+            path = bot.save_checks(
+                [bot.Check(app_id="123456", country="US", keyword="scanner")],
+                "2026-06-08T07:21:00+00:00",
+                Path(temp_dir),
+            )
+            with patch("builtins.input", side_effect=["GB, DE", "gb scanner", "de scanner; de scan"]):
+                updated_path = bot.add_geo(path)
+            checks = bot.load_checks(updated_path)
 
         self.assertEqual(
             checks,
@@ -192,22 +166,18 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_delete_geo_removes_multiple_geos(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_checks_dir = bot.CHECKS_DIR
-            bot.CHECKS_DIR = Path(temp_dir)
-            try:
-                path = bot.save_checks(
-                    [
-                        bot.Check(app_id="123456", country="US", keyword="us scanner"),
-                        bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
-                        bot.Check(app_id="123456", country="DE", keyword="de scanner"),
-                    ],
-                    "2026-06-08T07:21:00+00:00",
-                )
-                with patch("builtins.input", side_effect=["GB, DE", "DELETE GB, DE"]):
-                    updated_path = bot.delete_geo(path)
-                checks = bot.load_checks(updated_path)
-            finally:
-                bot.CHECKS_DIR = original_checks_dir
+            path = bot.save_checks(
+                [
+                    bot.Check(app_id="123456", country="US", keyword="us scanner"),
+                    bot.Check(app_id="123456", country="GB", keyword="gb scanner"),
+                    bot.Check(app_id="123456", country="DE", keyword="de scanner"),
+                ],
+                "2026-06-08T07:21:00+00:00",
+                Path(temp_dir),
+            )
+            with patch("builtins.input", side_effect=["GB, DE", "DELETE GB, DE"]):
+                updated_path = bot.delete_geo(path)
+            checks = bot.load_checks(updated_path)
 
         self.assertEqual(checks, [bot.Check(app_id="123456", country="US", keyword="us scanner")])
 
@@ -268,22 +238,18 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_write_report_uses_public_column_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                path = bot.write_report(
-                    [
-                        RankResult(
-                            app_id="123456",
-                            country="US",
-                            keyword="ai chat",
-                            rank=4,
-                            checked_at="2026-06-08T07:21:00+00:00",
-                        )
-                    ]
-                )
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            path = bot.write_report(
+                [
+                    RankResult(
+                        app_id="123456",
+                        country="US",
+                        keyword="ai chat",
+                        rank=4,
+                        checked_at="2026-06-08T07:21:00+00:00",
+                    )
+                ],
+                Path(temp_dir),
+            )
 
             with path.open("r", encoding="utf-8", newline="") as file:
                 rows = list(csv.reader(file))
@@ -293,19 +259,15 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_write_report_sorts_rows_by_rank(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                path = bot.write_report(
-                    [
-                        RankResult("123456", "US", "rank three", 3, "2026-06-08T07:21:00+00:00"),
-                        RankResult("123456", "US", "rank one", 1, "2026-06-08T07:21:00+00:00"),
-                        RankResult("123456", "US", "not found", None, "2026-06-08T07:21:00+00:00"),
-                        RankResult("123456", "US", "rank two", 2, "2026-06-08T07:21:00+00:00"),
-                    ]
-                )
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            path = bot.write_report(
+                [
+                    RankResult("123456", "US", "rank three", 3, "2026-06-08T07:21:00+00:00"),
+                    RankResult("123456", "US", "rank one", 1, "2026-06-08T07:21:00+00:00"),
+                    RankResult("123456", "US", "not found", None, "2026-06-08T07:21:00+00:00"),
+                    RankResult("123456", "US", "rank two", 2, "2026-06-08T07:21:00+00:00"),
+                ],
+                Path(temp_dir),
+            )
 
             with path.open("r", encoding="utf-8", newline="") as file:
                 rows = list(csv.DictReader(file))
@@ -314,16 +276,12 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_write_report_uses_dash_for_missing_rank(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                path = bot.write_report(
-                    [
-                        RankResult("123456", "US", "missing rank", None, "2026-06-08T07:21:00+00:00"),
-                    ]
-                )
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            path = bot.write_report(
+                [
+                    RankResult("123456", "US", "missing rank", None, "2026-06-08T07:21:00+00:00"),
+                ],
+                Path(temp_dir),
+            )
 
             with path.open("r", encoding="utf-8", newline="") as file:
                 rows = list(csv.reader(file))
@@ -464,24 +422,20 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_week_report_prints_ready_message_with_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                for day in range(2, 9):
-                    report_date = f"2026-06-{day:02d}T08:00:00+00:00"
-                    report_path = bot.REPORTS_DIR / f"positions-202606{day:02d}T080000Z.csv"
-                    report_path.write_text(
-                        "keyword,rank,country,app_id,date\n"
-                        f"ai chat,{day},US,123456,{report_date}\n",
-                        encoding="utf-8",
-                    )
+            reports_dir = Path(temp_dir)
+            for day in range(2, 9):
+                report_date = f"2026-06-{day:02d}T08:00:00+00:00"
+                report_path = reports_dir / f"positions-202606{day:02d}T080000Z.csv"
+                report_path.write_text(
+                    "keyword,rank,country,app_id,date\n"
+                    f"ai chat,{day},US,123456,{report_date}\n",
+                    encoding="utf-8",
+                )
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_week_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_week_report(reports_dir)
 
             weekly_report_path = Path(temp_dir) / "week-report-2026-06-02..2026-06-08.csv"
             with weekly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -509,22 +463,18 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_week_report_is_ready_with_one_report_day(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
-                report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
-                    encoding="utf-8",
-                )
+            reports_dir = Path(temp_dir)
+            report_path = reports_dir / "positions-20260608T080000Z.csv"
+            report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
+                encoding="utf-8",
+            )
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_week_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_week_report(reports_dir)
 
             weekly_report_path = Path(temp_dir) / "week-report-2026-06-02..2026-06-08.csv"
             with weekly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -538,30 +488,26 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_week_report_uses_latest_report_file_for_day(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                older_report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
-                older_report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
-                    encoding="utf-8",
-                )
-                newer_report_path = bot.REPORTS_DIR / "positions-20260608T090000Z.csv"
-                newer_report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "ai chat,2,US,123456,2026-06-08T09:00:00+00:00\n",
-                    encoding="utf-8",
-                )
-                os.utime(older_report_path, (1, 1))
-                os.utime(newer_report_path, (2, 2))
+            reports_dir = Path(temp_dir)
+            older_report_path = reports_dir / "positions-20260608T080000Z.csv"
+            older_report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
+                encoding="utf-8",
+            )
+            newer_report_path = reports_dir / "positions-20260608T090000Z.csv"
+            newer_report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "ai chat,2,US,123456,2026-06-08T09:00:00+00:00\n",
+                encoding="utf-8",
+            )
+            os.utime(older_report_path, (1, 1))
+            os.utime(newer_report_path, (2, 2))
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_week_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_week_report(reports_dir)
 
             weekly_report_path = Path(temp_dir) / "week-report-2026-06-02..2026-06-08.csv"
             with weekly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -572,22 +518,18 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_week_report_writes_dash_for_not_found_rank(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
-                report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "ai chat,not found,US,123456,2026-06-08T08:00:00+00:00\n",
-                    encoding="utf-8",
-                )
+            reports_dir = Path(temp_dir)
+            report_path = reports_dir / "positions-20260608T080000Z.csv"
+            report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "ai chat,not found,US,123456,2026-06-08T08:00:00+00:00\n",
+                encoding="utf-8",
+            )
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_week_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_week_report(reports_dir)
 
             weekly_report_path = Path(temp_dir) / "week-report-2026-06-02..2026-06-08.csv"
             with weekly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -598,23 +540,19 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_week_report_sorts_by_latest_rank(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
-                report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "z top,1,US,123456,2026-06-08T08:00:00+00:00\n"
-                    "a second,2,US,123456,2026-06-08T08:00:00+00:00\n",
-                    encoding="utf-8",
-                )
+            reports_dir = Path(temp_dir)
+            report_path = reports_dir / "positions-20260608T080000Z.csv"
+            report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "z top,1,US,123456,2026-06-08T08:00:00+00:00\n"
+                "a second,2,US,123456,2026-06-08T08:00:00+00:00\n",
+                encoding="utf-8",
+            )
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_week_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_week_report(reports_dir)
 
             weekly_report_path = Path(temp_dir) / "week-report-2026-06-02..2026-06-08.csv"
             with weekly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -625,39 +563,30 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_week_report_explains_no_reports_for_week(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_week_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_week_report(Path(temp_dir))
 
         self.assertIn("Weekly report not ready: week-report-2026-06-02..2026-06-08", output.getvalue())
         self.assertIn("Reason: no saved position reports found for the last 7 days.", output.getvalue())
 
     def test_print_month_report_prints_ready_message_with_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                for day in (1, 8):
-                    report_date = f"2026-06-{day:02d}T08:00:00+00:00"
-                    report_path = bot.REPORTS_DIR / f"positions-202606{day:02d}T080000Z.csv"
-                    report_path.write_text(
-                        "keyword,rank,country,app_id,date\n"
-                        f"ai chat,{day},US,123456,{report_date}\n",
-                        encoding="utf-8",
-                    )
+            reports_dir = Path(temp_dir)
+            for day in (1, 8):
+                report_date = f"2026-06-{day:02d}T08:00:00+00:00"
+                report_path = reports_dir / f"positions-202606{day:02d}T080000Z.csv"
+                report_path.write_text(
+                    "keyword,rank,country,app_id,date\n"
+                    f"ai chat,{day},US,123456,{report_date}\n",
+                    encoding="utf-8",
+                )
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_month_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_month_report(reports_dir)
 
             monthly_report_path = Path(temp_dir) / "month-report-2026-06-01..2026-06-08.csv"
             with monthly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -686,30 +615,26 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_month_report_uses_latest_report_file_for_day(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                older_report_path = bot.REPORTS_DIR / "positions-20260608T080000Z.csv"
-                older_report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
-                    encoding="utf-8",
-                )
-                newer_report_path = bot.REPORTS_DIR / "positions-20260608T090000Z.csv"
-                newer_report_path.write_text(
-                    "keyword,rank,country,app_id,date\n"
-                    "ai chat,2,US,123456,2026-06-08T09:00:00+00:00\n",
-                    encoding="utf-8",
-                )
-                os.utime(older_report_path, (1, 1))
-                os.utime(newer_report_path, (2, 2))
+            reports_dir = Path(temp_dir)
+            older_report_path = reports_dir / "positions-20260608T080000Z.csv"
+            older_report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "ai chat,4,US,123456,2026-06-08T08:00:00+00:00\n",
+                encoding="utf-8",
+            )
+            newer_report_path = reports_dir / "positions-20260608T090000Z.csv"
+            newer_report_path.write_text(
+                "keyword,rank,country,app_id,date\n"
+                "ai chat,2,US,123456,2026-06-08T09:00:00+00:00\n",
+                encoding="utf-8",
+            )
+            os.utime(older_report_path, (1, 1))
+            os.utime(newer_report_path, (2, 2))
 
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_month_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_month_report(reports_dir)
 
             monthly_report_path = Path(temp_dir) / "month-report-2026-06-01..2026-06-08.csv"
             with monthly_report_path.open("r", encoding="utf-8", newline="") as file:
@@ -720,18 +645,118 @@ class ReportFormatTests(unittest.TestCase):
 
     def test_print_month_report_explains_no_reports_for_month(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_reports_dir = bot.REPORTS_DIR
-            bot.REPORTS_DIR = Path(temp_dir)
-            try:
-                output = io.StringIO()
-                with patch.object(bot, "date", FixedDate):
-                    with contextlib.redirect_stdout(output):
-                        bot.print_month_report()
-            finally:
-                bot.REPORTS_DIR = original_reports_dir
+            output = io.StringIO()
+            with patch.object(bot, "date", FixedDate):
+                with contextlib.redirect_stdout(output):
+                    bot.print_month_report(Path(temp_dir))
 
         self.assertIn("Monthly report not ready: month-report-2026-06-01..2026-06-08", output.getvalue())
         self.assertIn("Reason: no saved position reports found for the current month.", output.getvalue())
+
+
+class MultiAppProjectTests(unittest.TestCase):
+    def test_legacy_layout_requires_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with isolated_projects(temp_dir) as root:
+                (root / "checks").mkdir()
+                (root / "checks" / "app.json").write_text('{"app_id": "6443812062"}\n', encoding="utf-8")
+                with self.assertRaises(SystemExit) as raised:
+                    bot.ensure_active_app_id()
+
+        self.assertIn("--migrate-projects", str(raised.exception))
+
+    def test_list_apps_marks_active_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with isolated_projects(temp_dir):
+                bot.save_active_app_id("6443812062", name="Doc Scanner PDF, Convert & OCR")
+                bot.save_project_app("111", name="Other App")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    bot.list_apps()
+
+        self.assertIn("6443812062  Doc Scanner PDF, Convert & OCR (active)", output.getvalue())
+        self.assertIn("111  Other App", output.getvalue())
+        self.assertNotIn("111  Other App (active)", output.getvalue())
+
+    def test_use_app_switches_active_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with isolated_projects(temp_dir):
+                bot.save_active_app_id("6443812062")
+                bot.save_project_app("111")
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    bot.use_app("111")
+                self.assertEqual(bot.load_active_project_id(), "111")
+                self.assertEqual(bot.resolve_app_id(), "111")
+                self.assertEqual(bot.resolve_app_id("6443812062"), "6443812062")
+
+        self.assertIn("Active project: 111", output.getvalue())
+
+    def test_use_app_rejects_unknown_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with isolated_projects(temp_dir):
+                with self.assertRaises(SystemExit) as raised:
+                    bot.use_app("999")
+
+        self.assertIn("No project for app_id=999", str(raised.exception))
+
+    def test_migrate_projects_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with isolated_projects(temp_dir) as root:
+                checks = root / "checks"
+                reports = root / "reports"
+                checks.mkdir()
+                reports.mkdir()
+                (checks / "app.json").write_text(
+                    '{\n  "app_id": "6443812062",\n  "saved_at": "2026-06-08T13:10:00+00:00"\n}\n',
+                    encoding="utf-8",
+                )
+                (checks / "checks-20260607T113705Z.json").write_text('{"checks": []}\n', encoding="utf-8")
+                (reports / "positions-20260607T113719Z.csv").write_text(
+                    "keyword,rank,country,app_id,date\nscanner,1,US,6443812062,2026-06-07T11:37:19+00:00\n",
+                    encoding="utf-8",
+                )
+
+                bot.migrate_projects()
+                first_app = (root / "projects" / "6443812062" / "app.json").read_text(encoding="utf-8")
+                first_checks = list((root / "projects" / "6443812062" / "checks").glob("checks-*.json"))
+                first_reports = list((root / "projects" / "6443812062" / "reports").iterdir())
+                bot.migrate_projects()
+                second_app = (root / "projects" / "6443812062" / "app.json").read_text(encoding="utf-8")
+
+                self.assertFalse((root / "checks").exists())
+                self.assertFalse((root / "reports").exists())
+                self.assertEqual(json.loads((root / "projects.json").read_text(encoding="utf-8")), {"active": "6443812062"})
+                self.assertEqual(len(first_checks), 1)
+                self.assertEqual(len(first_reports), 1)
+                self.assertEqual(first_app, second_app)
+                self.assertEqual(bot.load_active_app_id(), "6443812062")
+
+    def test_write_report_stays_in_selected_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with isolated_projects(temp_dir):
+                bot.save_active_app_id("111")
+                bot.save_project_app("222")
+                path = bot.write_report(
+                    [RankResult("222", "US", "scanner", 1, "2026-06-08T07:21:00+00:00")],
+                    bot.reports_dir("222"),
+                )
+
+                self.assertEqual(path.parent, bot.reports_dir("222"))
+                self.assertFalse(any(bot.reports_dir("111").glob("positions-*.csv")))
+
+    def test_run_one_check_keeps_failures_local(self) -> None:
+        check = bot.Check(app_id="123456", country="US", keyword="scanner")
+
+        def fake_find_rank(self: object, app_id: str, country: str, keyword: str, limit: int = bot.DEFAULT_SEARCH_LIMIT) -> int:
+            raise TimeoutError("temporary")
+
+        with patch.object(bot.AppStoreClient, "find_rank", fake_find_rank):
+            with patch.object(bot.time, "sleep", return_value=None):
+                result = bot.run_one_check(bot.AppStoreClient(), check, bot.DEFAULT_SEARCH_LIMIT, "2026-06-08T07:21:00+00:00")
+
+        self.assertTrue(result.failed)
+        self.assertIsNone(result.rank)
 
 
 if __name__ == "__main__":
