@@ -4,3 +4,4 @@ __pycache__/
 .env
 checks/
 reports/
+.claude/settings.local.json
