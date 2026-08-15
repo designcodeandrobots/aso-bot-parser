@@ -23,6 +23,7 @@ APP_ID_FILE = CHECKS_DIR / "app.json"
 DEFAULT_DELAY_SECONDS = 0.0
 DEFAULT_WORKERS = 4
 DEFAULT_RETRIES = 2
+DEFAULT_CHECK_ATTEMPTS = 6
 DEFAULT_SEARCH_LIMIT = 10
 FALLBACK_SEARCH_LIMIT = 200
 REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
@@ -42,6 +43,7 @@ class RankResult:
     keyword: str
     rank: int | None
     checked_at: str
+    failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -728,12 +730,36 @@ def print_top_apps(country: str, keyword: str, client: AppStoreClient | None = N
 
 
 def run_one_check(client: AppStoreClient, check: Check, limit: int, checked_at: str) -> RankResult:
+    """Resolve one keyword, keeping failures local to that keyword.
+
+    Apple returns intermittent 403s. Without this, a single failure would
+    propagate out of run_checks() and discard every result already gathered.
+    """
+    for attempt in range(DEFAULT_CHECK_ATTEMPTS):
+        try:
+            rank = client.find_rank(check.app_id, check.country, check.keyword, limit)
+        except Exception as error:  # noqa: BLE001 - keep the rest of the run alive
+            if attempt >= DEFAULT_CHECK_ATTEMPTS - 1:
+                print(f"  !! {check.keyword}: {error}")
+                break
+            time.sleep(2**attempt)
+            continue
+
+        return RankResult(
+            app_id=check.app_id,
+            country=check.country,
+            keyword=check.keyword,
+            rank=rank,
+            checked_at=checked_at,
+        )
+
     return RankResult(
         app_id=check.app_id,
         country=check.country,
         keyword=check.keyword,
-        rank=client.find_rank(check.app_id, check.country, check.keyword, limit),
+        rank=None,
         checked_at=checked_at,
+        failed=True,
     )
 
 
@@ -792,7 +818,7 @@ def print_table(results: list[RankResult]) -> None:
     rows = [
         [
             result.keyword,
-            rank_display(result.rank),
+            "ERR" if result.failed else rank_display(result.rank),
             result.country,
             result.app_id,
             result.checked_at,
@@ -811,6 +837,7 @@ def print_json(results: list[RankResult]) -> None:
             "country": result.country,
             "keyword": result.keyword,
             "rank": result.rank,
+            "failed": result.failed,
             "date": result.checked_at,
         }
         for result in results
@@ -818,16 +845,22 @@ def print_json(results: list[RankResult]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def check_positions(checks: list[Check], limit: int, output_format: str) -> Path:
+def check_positions(checks: list[Check], limit: int, output_format: str) -> Path | None:
     print("\nChecking App Store positions...")
     results = run_checks(checks, limit)
-    report_path = write_report(results)
 
     if output_format == "json":
         print_json(results)
     else:
         print_table(results)
 
+    failed = [result.keyword for result in results if result.failed]
+    if failed:
+        print(f"\nNOT saved: {len(failed)} keyword(s) could not be checked: {', '.join(sorted(failed))}")
+        print("A report with these gaps would corrupt the history. Re-run the check.")
+        return None
+
+    report_path = write_report(results)
     print(f"\nReport saved: {report_path}")
     return report_path
 
