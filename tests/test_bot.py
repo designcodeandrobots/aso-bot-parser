@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import unittest
+import urllib.error
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -201,14 +202,13 @@ class ReportFormatTests(unittest.TestCase):
         self.assertIn("| position | app_name", output.getvalue())
         self.assertIn("| 1        | Scanner One", output.getvalue())
 
-    def test_run_checks_uses_fast_parallel_mode(self) -> None:
+    def test_run_checks_returns_every_keyword(self) -> None:
         checks = [
             bot.Check(app_id="123456", country="US", keyword="first"),
             bot.Check(app_id="123456", country="US", keyword="second"),
         ]
 
         def fake_find_rank(self: object, app_id: str, country: str, keyword: str, limit: int = bot.DEFAULT_SEARCH_LIMIT) -> int:
-            time.sleep(0.01)
             return {"first": 1, "second": 2}[keyword]
 
         with patch.object(bot.AppStoreClient, "find_rank", fake_find_rank):
@@ -216,18 +216,71 @@ class ReportFormatTests(unittest.TestCase):
 
         self.assertEqual({result.keyword: result.rank for result in results}, {"first": 1, "second": 2})
 
-    def test_find_rank_falls_back_to_top_200_when_not_in_top_10(self) -> None:
+    def test_find_rank_uses_a_single_request(self) -> None:
         client = bot.AppStoreClient()
+        limits: list[int] = []
 
         def fake_search_payload(country: str, keyword: str, limit: int) -> dict[str, object]:
-            if limit == bot.DEFAULT_SEARCH_LIMIT:
-                return {"results": [{"trackId": "111"} for _ in range(bot.DEFAULT_SEARCH_LIMIT)]}
+            limits.append(limit)
             return {"results": [{"trackId": "111"} for _ in range(22)] + [{"trackId": "123456"}]}
 
         with patch.object(client, "search_payload", fake_search_payload):
             rank = client.find_rank("123456", "US", "scanner")
 
         self.assertEqual(rank, 23)
+        self.assertEqual(limits, [bot.DEFAULT_SEARCH_LIMIT])
+
+    def test_find_rank_rejects_an_empty_result_set(self) -> None:
+        client = bot.AppStoreClient()
+
+        with patch.object(client, "search_payload", lambda country, keyword, limit: {"results": []}):
+            with self.assertRaises(bot.SuspectEmptyResults):
+                client.find_rank("123456", "US", "scanner")
+
+    def test_search_payload_raises_rate_limited_on_403(self) -> None:
+        client = bot.AppStoreClient(pacer=bot.RequestPacer(0.0))
+
+        def raise_403(request: object, timeout: int = 20) -> None:
+            raise urllib.error.HTTPError("url", 403, "Forbidden", None, None)
+
+        with patch.object(bot.urllib.request, "urlopen", raise_403):
+            with self.assertRaises(bot.RateLimited):
+                client.search_payload("US", "scanner", 200)
+
+    def test_run_checks_pauses_and_retries_the_throttled_keyword(self) -> None:
+        checks = [bot.Check(app_id="123456", country="US", keyword="scanner")]
+        calls: list[str] = []
+        pauses: list[float] = []
+
+        def fake_find_rank(self: object, app_id: str, country: str, keyword: str, limit: int = bot.DEFAULT_SEARCH_LIMIT) -> int:
+            calls.append(keyword)
+            if len(calls) == 1:
+                raise bot.RateLimited("HTTP 403")
+            return 4
+
+        with patch.object(bot.AppStoreClient, "find_rank", fake_find_rank):
+            with patch.object(bot.RequestPacer, "pause", lambda self, seconds: pauses.append(seconds)):
+                results = bot.run_checks(checks, limit=bot.DEFAULT_SEARCH_LIMIT)
+
+        self.assertEqual(pauses, [bot.THROTTLE_PAUSE_SECONDS[0]])
+        self.assertEqual([result.rank for result in results], [4])
+        self.assertFalse(results[0].failed)
+
+    def test_run_checks_gives_up_after_repeated_throttling(self) -> None:
+        checks = [
+            bot.Check(app_id="123456", country="US", keyword="first"),
+            bot.Check(app_id="123456", country="US", keyword="second"),
+        ]
+
+        def always_throttled(self: object, app_id: str, country: str, keyword: str, limit: int = bot.DEFAULT_SEARCH_LIMIT) -> int:
+            raise bot.RateLimited("HTTP 403")
+
+        with patch.object(bot.AppStoreClient, "find_rank", always_throttled):
+            with patch.object(bot.RequestPacer, "pause", lambda self, seconds: None):
+                results = bot.run_checks(checks, limit=bot.DEFAULT_SEARCH_LIMIT)
+
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result.failed for result in results))
 
     def test_markdown_table_escapes_pipe_characters(self) -> None:
         output = io.StringIO()
