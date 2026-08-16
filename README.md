@@ -99,7 +99,7 @@ After input, the tool:
 
 ## Position Check Speed
 
-Apple documents the Search API at roughly 20 calls per minute per IP and answers with 403 once that is exceeded. Checks are therefore serialized at one request every 3.2 seconds, one request per keyword: about 1.2 minutes for 23 keywords and about 7 minutes for 129.
+Apple documents the Search API at roughly 20 calls per minute per IP and answers with 403 once that is exceeded. Checks are therefore serialized at one request every 3.2 seconds, one request per keyword. Measured: 23 keywords in 1 minute 11 seconds, 129 keywords in 9 minutes 31 seconds.
 
 ```bash
 python3 -m app_store_rank_bot /check-new-positions
