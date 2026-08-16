@@ -4,11 +4,12 @@ ASO Bot Parser is a small CLI tool that checks an iOS app's current App Store se
 
 ## Updates
 
-- Position checks are now fast by default: the CLI uses 4 parallel App Store requests with no artificial delay.
-- Position reports now check the top 10 App Store results first, then fall back to the top 200 only when the app is not in the top 10.
-- In the latest measured run, 54 keyword checks completed in 36.8 seconds, about 6-8x faster than the previous 4-5 minute sequential run with 3-second delays.
-- Temporary App Store network and SSL errors are retried automatically before the run fails.
-- The old `--workers` and `--delay-seconds` options were removed so `/check-new-positions` always uses the same fast behavior.
+- Each tracked app is a separate project under `projects/<app_id>/`, selected with `--app`, `--use-app`, and `--list-apps`.
+- Position checks are paced to stay inside Apple's documented Search API limit of about 20 calls per minute: one request at a time, 3.2 seconds apart.
+- Each keyword costs exactly one request against the top 200. `limit` is part of Apple's edge cache key, so the old top-10-then-top-200 fallback paid for two full requests.
+- A 403 throttles the whole IP, so the run pauses globally (60s, then 300s, then 900s) and retries the keyword instead of hammering it. After three pauses the run stops rather than deepening the block.
+- Temporary network, SSL, and 5xx errors are still retried per request with exponential backoff.
+- An empty result set is treated as a suspect response, never recorded as "not ranked".
 
 ## How It Works
 
@@ -21,10 +22,10 @@ App Store search rank is measured for a specific keyword in a specific country. 
 The tool calls the public App Store Search API:
 
 ```text
-https://itunes.apple.com/search?term=<keyword>&country=<country>&entity=software&limit=10
+https://itunes.apple.com/search?term=<keyword>&country=<country>&entity=software&limit=200
 ```
 
-It then scans the returned apps in order and compares each result's `trackId` with your `app_id`. If the app is not found in the first 10 results, the tool makes one fallback request with `limit=200` to find the deeper position.
+It then scans the returned apps in order and compares each result's `trackId` with your `app_id`. One request covers the full top 200, so no second lookup is needed.
 
 - If the app is the first result, rank is `1`.
 - If the app is the tenth result, rank is `10`.
@@ -92,13 +93,13 @@ ai chat, note taking app, language learning
 After input, the tool:
 
 1. Saves the checks to `checks/checks-<timestamp>.json`
-2. Checks keywords in fast parallel mode
+2. Checks keywords one at a time, paced for Apple's rate limit
 3. Saves the report to `reports/positions-<timestamp>.csv`
 4. Prints the same results to the terminal
 
 ## Position Check Speed
 
-Position checks use the fast mode by default: 4 parallel App Store requests, no artificial delay, and automatic retries for temporary network or SSL errors.
+Apple documents the Search API at roughly 20 calls per minute per IP and answers with 403 once that is exceeded. Checks are therefore serialized at one request every 3.2 seconds, one request per keyword. Measured: 23 keywords in 1 minute 11 seconds, 129 keywords in 9 minutes 31 seconds.
 
 ```bash
 python3 -m app_store_rank_bot /check-new-positions
@@ -108,8 +109,8 @@ python3 -m app_store_rank_bot /check-new-positions
 
 The tool keeps local history in two folders:
 
-- `checks/`: saved app, country, and keyword sets
-- `reports/`: saved rank reports
+- `projects/<app_id>/checks/`: saved app, country, and keyword sets
+- `projects/<app_id>/reports/`: saved rank reports
 
 To list saved check sets:
 

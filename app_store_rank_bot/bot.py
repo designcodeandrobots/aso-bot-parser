@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import csv
 import json
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -25,12 +25,18 @@ LEGACY_REPORTS_DIR = Path("reports")
 DEFAULT_PROJECT_APP_ID = "6443812062"
 DEFAULT_PROJECT_APP_NAME = "Doc Scanner PDF, Convert & OCR"
 MIGRATE_HINT = "Legacy checks/ or reports/ found. Run: python3 -m app_store_rank_bot --migrate-projects"
-DEFAULT_DELAY_SECONDS = 0.0
-DEFAULT_WORKERS = 4
+# Apple documents the Search API at roughly 20 calls per minute per IP and
+# answers with 403 (never 429) once that is exceeded. Requests are serialized
+# through one pacer at a slightly slower rate to stay inside that budget.
+MIN_REQUEST_INTERVAL_SECONDS = 3.2
 DEFAULT_RETRIES = 2
-DEFAULT_CHECK_ATTEMPTS = 6
-DEFAULT_SEARCH_LIMIT = 10
-FALLBACK_SEARCH_LIMIT = 200
+# One request per keyword: `limit` is part of Apple's edge cache key, so a
+# top-10 probe followed by a top-200 fallback costs two full origin requests.
+DEFAULT_SEARCH_LIMIT = 200
+# A 403 blocks the whole IP for an unknown period, so retrying the individual
+# request only feeds the block. The run pauses globally instead, escalating on
+# each trip, and gives up rather than grinding against a sustained block.
+THROTTLE_PAUSE_SECONDS = (60.0, 300.0, 900.0)
 REPORT_HEADERS = ["keyword", "rank", "country", "app_id", "date"]
 
 
@@ -59,7 +65,45 @@ class AppSearchResult:
     developer: str
 
 
+class RateLimited(Exception):
+    """Apple answered 403: this IP is throttled, not this request."""
+
+
+class SuspectEmptyResults(Exception):
+    """Apple answered 200 with no results at all.
+
+    A throttled response sometimes arrives this way. A real keyword always
+    matches something, so an empty payload must never be recorded as a rank.
+    """
+
+
+class RequestPacer:
+    """Serializes outgoing requests to a minimum start-to-start interval."""
+
+    def __init__(self, min_interval: float) -> None:
+        self.min_interval = min_interval
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            delay = self._next_allowed - now
+            if delay > 0:
+                time.sleep(delay)
+                now = time.monotonic()
+            self._next_allowed = now + self.min_interval
+
+    def pause(self, seconds: float) -> None:
+        """Hold every caller off for `seconds`, on top of the usual interval."""
+        with self._lock:
+            self._next_allowed = time.monotonic() + seconds
+
+
 class AppStoreClient:
+    def __init__(self, pacer: RequestPacer | None = None) -> None:
+        self.pacer = pacer or RequestPacer(MIN_REQUEST_INTERVAL_SECONDS)
+
     def search_payload(self, country: str, keyword: str, limit: int) -> dict[str, Any]:
         query = urllib.parse.urlencode(
             {
@@ -75,9 +119,18 @@ class AppStoreClient:
         )
 
         for attempt in range(DEFAULT_RETRIES + 1):
+            self.pacer.wait()
             try:
                 with urllib.request.urlopen(request, timeout=20) as response:
                     return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                # 403 means the IP is throttled; backing off here would only
+                # add traffic, so hand it to the caller's circuit breaker.
+                if error.code == 403:
+                    raise RateLimited(f"HTTP 403 from the Search API on '{keyword}'") from error
+                if attempt >= DEFAULT_RETRIES:
+                    raise
+                time.sleep(2**attempt)
             except (TimeoutError, urllib.error.URLError, ssl.SSLError):
                 if attempt >= DEFAULT_RETRIES:
                     raise
@@ -87,15 +140,13 @@ class AppStoreClient:
 
     def find_rank(self, app_id: str, country: str, keyword: str, limit: int = DEFAULT_SEARCH_LIMIT) -> int | None:
         payload = self.search_payload(country, keyword, limit)
+        results = payload.get("results", [])
+        if not results:
+            raise SuspectEmptyResults(f"empty result set for '{keyword}'")
 
-        for index, item in enumerate(payload.get("results", []), start=1):
+        for index, item in enumerate(results, start=1):
             if str(item.get("trackId")) == app_id:
                 return index
-        if limit < FALLBACK_SEARCH_LIMIT:
-            fallback_payload = self.search_payload(country, keyword, FALLBACK_SEARCH_LIMIT)
-            for index, item in enumerate(fallback_payload.get("results", []), start=1):
-                if str(item.get("trackId")) == app_id:
-                    return index
         return None
 
     def search_apps(self, country: str, keyword: str, limit: int = 10) -> list[AppSearchResult]:
@@ -977,27 +1028,35 @@ def print_top_apps(country: str, keyword: str, client: AppStoreClient | None = N
 def run_one_check(client: AppStoreClient, check: Check, limit: int, checked_at: str) -> RankResult:
     """Resolve one keyword, keeping failures local to that keyword.
 
-    Apple returns intermittent 403s. Without this, a single failure would
-    propagate out of run_checks() and discard every result already gathered.
+    Throttling is not handled here: RateLimited travels up to run_checks(), which
+    owns the circuit breaker. Everything else is contained so that one bad
+    keyword cannot discard the results already gathered.
     """
-    for attempt in range(DEFAULT_CHECK_ATTEMPTS):
-        try:
-            rank = client.find_rank(check.app_id, check.country, check.keyword, limit)
-        except Exception as error:  # noqa: BLE001 - keep the rest of the run alive
-            if attempt >= DEFAULT_CHECK_ATTEMPTS - 1:
-                print(f"  !! {check.keyword}: {error}")
-                break
-            time.sleep(2**attempt)
-            continue
-
+    try:
+        rank = client.find_rank(check.app_id, check.country, check.keyword, limit)
+    except RateLimited:
+        raise
+    except Exception as error:  # noqa: BLE001 - keep the rest of the run alive
+        print(f"  !! {check.keyword}: {error}")
         return RankResult(
             app_id=check.app_id,
             country=check.country,
             keyword=check.keyword,
-            rank=rank,
+            rank=None,
             checked_at=checked_at,
+            failed=True,
         )
 
+    return RankResult(
+        app_id=check.app_id,
+        country=check.country,
+        keyword=check.keyword,
+        rank=rank,
+        checked_at=checked_at,
+    )
+
+
+def failed_result(check: Check, checked_at: str) -> RankResult:
     return RankResult(
         app_id=check.app_id,
         country=check.country,
@@ -1009,30 +1068,38 @@ def run_one_check(client: AppStoreClient, check: Check, limit: int, checked_at: 
 
 
 def run_checks(checks: list[Check], limit: int) -> list[RankResult]:
+    """Check every keyword sequentially, pausing the whole run when throttled."""
     client = AppStoreClient()
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     results: list[RankResult] = []
 
-    if DEFAULT_WORKERS > 1:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_WORKERS) as executor:
-            futures: dict[concurrent.futures.Future[RankResult], tuple[int, Check]] = {}
-            for index, check in enumerate(checks, start=1):
-                print(f"[{index}/{len(checks)}] {check.country} / {check.keyword}")
-                futures[executor.submit(run_one_check, client, check, limit, checked_at)] = (index, check)
-                if DEFAULT_DELAY_SECONDS > 0 and index < len(checks):
-                    time.sleep(DEFAULT_DELAY_SECONDS)
+    pending = list(checks)
+    total = len(pending)
+    done = 0
+    trips = 0
 
-            for future in concurrent.futures.as_completed(futures):
-                results.append(future.result())
+    while pending:
+        check = pending[0]
+        print(f"[{done + 1}/{total}] {check.country} / {check.keyword}")
+        try:
+            result = run_one_check(client, check, limit, checked_at)
+        except RateLimited as error:
+            if trips >= len(THROTTLE_PAUSE_SECONDS):
+                print(f"  !! {error}")
+                print(f"Throttled {trips} times. Stopping; {len(pending)} keyword(s) left unchecked.")
+                results.extend(failed_result(item, checked_at) for item in pending)
+                return results
 
-        return results
+            pause = THROTTLE_PAUSE_SECONDS[trips]
+            trips += 1
+            print(f"  !! {error}")
+            print(f"Rate limited. Pausing {pause:g}s before retrying this keyword ({trips}/{len(THROTTLE_PAUSE_SECONDS)}).")
+            client.pacer.pause(pause)
+            continue
 
-    for index, check in enumerate(checks, start=1):
-        print(f"[{index}/{len(checks)}] {check.country} / {check.keyword}")
-        results.append(run_one_check(client, check, limit, checked_at))
-        if DEFAULT_DELAY_SECONDS > 0 and index < len(checks):
-            print(f"Waiting {DEFAULT_DELAY_SECONDS:g}s before the next request...")
-            time.sleep(DEFAULT_DELAY_SECONDS)
+        pending.pop(0)
+        done += 1
+        results.append(result)
 
     return results
 
