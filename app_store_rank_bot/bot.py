@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import http.client
 import json
 import ssl
 import subprocess
@@ -131,7 +132,16 @@ class AppStoreClient:
                 if attempt >= DEFAULT_RETRIES:
                     raise
                 time.sleep(2**attempt)
-            except (TimeoutError, urllib.error.URLError, ssl.SSLError):
+            except (
+                TimeoutError,
+                urllib.error.URLError,
+                ssl.SSLError,
+                # A truncated body is not a URLError, so it would otherwise skip
+                # the retry loop entirely. The top-200 payloads are large enough
+                # that Apple cuts one often on long runs.
+                http.client.HTTPException,
+                ConnectionError,
+            ):
                 if attempt >= DEFAULT_RETRIES:
                     raise
                 time.sleep(2**attempt)
