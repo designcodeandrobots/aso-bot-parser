@@ -5,3 +5,5 @@ __pycache__/
 checks/
 reports/
 .claude/settings.local.json
+.DS_Store
+logs/
