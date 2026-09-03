@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import unittest
+import http.client
 import urllib.error
 from datetime import date
 from pathlib import Path
@@ -246,6 +247,34 @@ class ReportFormatTests(unittest.TestCase):
         with patch.object(bot.urllib.request, "urlopen", raise_403):
             with self.assertRaises(bot.RateLimited):
                 client.search_payload("US", "scanner", 200)
+
+    def test_search_payload_retries_a_truncated_response(self) -> None:
+        """IncompleteRead is not a URLError, so it needs its own retry branch."""
+        client = bot.AppStoreClient(pacer=bot.RequestPacer(0.0))
+        attempts: list[int] = []
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"results": [{"trackId": 1}]}'
+
+        def flaky_urlopen(request: object, timeout: int = 20) -> FakeResponse:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise http.client.IncompleteRead(b"partial")
+            return FakeResponse()
+
+        with patch.object(bot.urllib.request, "urlopen", flaky_urlopen):
+            with patch.object(bot.time, "sleep", return_value=None):
+                payload = client.search_payload("US", "scanner", 200)
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(payload["results"], [{"trackId": 1}])
 
     def test_run_checks_pauses_and_retries_the_throttled_keyword(self) -> None:
         checks = [bot.Check(app_id="123456", country="US", keyword="scanner")]
